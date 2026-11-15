@@ -3,6 +3,7 @@ import { formatCents } from "@/money";
 import { logActivity } from "./activity";
 import { memberById } from "./houses";
 import { choreBounty, memberBalance, transfer } from "./ledger";
+import { hasOverdueDebt } from "./settleup";
 
 export type Result = { ok: true; payoutCents?: number } | { ok: false; error: string };
 
@@ -15,6 +16,7 @@ type TurnRow = {
   status: string;
   chore_name: string;
   skip_price_cents: number;
+  money_mode: "card" | "etransfer";
 };
 
 const NO_PHOTO = "Add a photo of the finished chore.";
@@ -25,8 +27,9 @@ async function lockTurn(t: Db, turnId: string): Promise<TurnRow | null> {
   await lockChoreOfTurn(t, turnId);
   const { rows } = await t.query<TurnRow>(
     `select t.id, t.chore_id, t.house_id, t.assignee_member_id, t.due_at, t.status,
-            c.name as chore_name, c.skip_price_cents
-     from turns t join chores c on c.id = t.chore_id where t.id = $1 for update of t`,
+            c.name as chore_name, c.skip_price_cents, h.money_mode
+     from turns t join chores c on c.id = t.chore_id join houses h on h.id = t.house_id
+     where t.id = $1 for update of t`,
     [turnId],
   );
   return rows[0] ?? null;
@@ -148,7 +151,9 @@ export async function payToSkip(db: Db, a: SkipArgs): Promise<Result> {
     if (!turn || turn.status !== "assigned") return fail("This turn is no longer waiting.");
     if (turn.assignee_member_id !== a.memberId) return fail("It is not your turn.");
     if (a.now.getTime() > turn.due_at.getTime()) return fail("The deadline has passed.");
-    if ((await memberBalance(t, a.memberId)) < turn.skip_price_cents) {
+    // A card house only lets you skip with money you have paid in. In an e-Transfer house the
+    // balance is a scoreboard, so skipping can take it below zero and the debt is settled later.
+    if (turn.money_mode === "card" && (await memberBalance(t, a.memberId)) < turn.skip_price_cents) {
       return fail(
         `You need at least ${formatCents(turn.skip_price_cents)} in your balance to skip. Top up first.`,
       );
@@ -183,6 +188,11 @@ export async function claimBounty(db: Db, a: ClaimArgs): Promise<Result> {
     const member = await memberById(t, a.memberId);
     if (!houseId || !member || member.houseId !== houseId || member.status !== "active") {
       return fail("Only paid-up housemates can claim.");
+    }
+    // In an e-Transfer house, not paying a settle-up debt on time means you cannot win any more
+    // money until you do.
+    if (await hasOverdueDebt(t, a.memberId, a.now)) {
+      return fail("You have a settle-up payment that is overdue. Pay it first, then you can claim.");
     }
     if (!(await photoBelongsTo(t, a.photoId, houseId))) return fail(NO_PHOTO);
 

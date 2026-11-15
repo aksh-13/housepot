@@ -5,11 +5,28 @@ import { getDb } from "@/db";
 import { endSession, normalizePhone, requestCode, setUserName, verifyCode } from "@/domain/auth";
 import { createChore, ensureTurns, updateChore } from "@/domain/chores";
 import { raiseDispute, voteDispute } from "@/domain/disputes";
-import { createHouse, joinHouse, memberById, setAutoReload, setPaused } from "@/domain/houses";
+import { fakeReceivedEmail, fakeRequestEmail } from "@/domain/fakeInterac";
+import {
+  createHouse,
+  joinHouse,
+  memberById,
+  setAutoReload,
+  setPaused,
+  setPayoutDetails,
+} from "@/domain/houses";
+import { forwardingAddress, handleInboundEmail, type InboundEmail } from "@/domain/inbound";
 import { memberBalance } from "@/domain/ledger";
 import { applyPaymentEvent, startCheckout } from "@/domain/payments";
 import { savePhoto } from "@/domain/photos";
 import { leaveHouse, markPayoutSent, voteClosePot } from "@/domain/settlement";
+import {
+  debtById,
+  markDebtPaid,
+  markDebtSent,
+  settleUpHouse,
+  textDebtPaid,
+  textNewDebts,
+} from "@/domain/settleup";
 import { claimBounty, markDone, payToSkip } from "@/domain/turns";
 import { textBountyOpen } from "@/domain/views";
 import {
@@ -23,7 +40,7 @@ import {
 import { isOperator } from "@/lib/operator";
 import { safeNext } from "@/lib/session";
 import { formatCents } from "@/money";
-import { getProviders, paymentsAreFake } from "@/providers";
+import { getProviders, inboundIsFake, paymentsAreFake } from "@/providers";
 import type { Schedule } from "@/time";
 
 const str = (fd: FormData, key: string) => String(fd.get(key) ?? "").trim();
@@ -84,6 +101,7 @@ export async function createHouseAction(fd: FormData): Promise<void> {
     userId: user.id,
     houseName: str(fd, "houseName"),
     depositCents: dollarsToCents(str(fd, "deposit") || "20"),
+    moneyMode: str(fd, "moneyMode") === "card" ? "card" : "etransfer",
     now: new Date(),
   });
   if (!created.ok) back("/new", "error", created.error);
@@ -336,20 +354,142 @@ export async function autoReloadAction(fd: FormData): Promise<void> {
 }
 
 export async function closeVoteAction(): Promise<void> {
-  const { member } = await requireMember("/house/settings");
+  const { member, house } = await requireMember("/house/settings");
   const result = await voteClosePot(getDb(), getProviders().payments, {
     memberId: member.id,
     now: new Date(),
   });
+  if (result.closed && house.moneyMode === "etransfer") {
+    await textNewDebts(getDb(), getProviders().sms, result.debts ?? [], `${await baseUrl()}/settle`);
+    back("/settle", "notice", "The house settled up. Here is who pays whom.");
+  }
   if (result.closed) back("/house", "notice", "The pot is closed and everyone has been cashed out.");
   back("/house/settings", "notice", `Vote counted: ${result.votes} of ${result.needed} needed.`);
 }
 
 export async function leaveAction(): Promise<void> {
-  const { member } = await requireMember("/house/settings");
+  const { member, house } = await requireMember("/house/settings");
   const left = await leaveHouse(getDb(), getProviders().payments, { memberId: member.id, now: new Date() });
   if (!left.ok) back("/house/settings", "error", left.error);
+  if (house.moneyMode === "etransfer") {
+    await textNewDebts(getDb(), getProviders().sms, left.debts ?? [], `${await baseUrl()}/settle`);
+    redirect(
+      "/settle?notice=You%20left%20the%20house.%20The%20house%20settled%20up%3A%20here%20is%20what%20is%20left%20to%20pay.",
+    );
+  }
   redirect("/?notice=You%20left%20the%20house%20and%20were%20cashed%20out.");
+}
+
+// ── Settling up by e-Transfer ─────────────────────────────────────────────────
+
+export async function savePayoutAction(fd: FormData): Promise<void> {
+  const { member } = await requireMember("/house/settings");
+  const saved = await setPayoutDetails(getDb(), {
+    memberId: member.id,
+    etransferEmail: str(fd, "etransferEmail"),
+    bank: str(fd, "bank"),
+  });
+  if (!saved.ok) back("/house/settings", "error", saved.error);
+  back(str(fd, "back") === "settle" ? "/settle" : "/house/settings", "notice", "Saved.");
+}
+
+export async function debtSentAction(fd: FormData): Promise<void> {
+  const user = await requireUser("/settle");
+  const sent = await markDebtSent(getDb(), { debtId: str(fd, "debtId"), userId: user.id, now: new Date() });
+  if (!sent.ok) back("/settle", "error", sent.error);
+  await getProviders()
+    .sms.send(
+      sent.debt.toPhone,
+      `${sent.debt.fromName} says they sent you ${formatCents(sent.debt.amountCents)} by e-Transfer. It is marked paid as soon as Interac's email reaches Housepot, or tap Received: ${await baseUrl()}/settle`,
+    )
+    .catch((err) => console.error("Sent text failed:", err));
+  back("/settle", "notice", `Marked as sent. ${sent.debt.toName} will confirm when it lands.`);
+}
+
+export async function debtReceivedAction(fd: FormData): Promise<void> {
+  const user = await requireUser("/settle");
+  const paid = await markDebtPaid(getDb(), {
+    debtId: str(fd, "debtId"),
+    via: "manual",
+    userId: user.id,
+    now: new Date(),
+  });
+  if (!paid.ok) back("/settle", "error", paid.error);
+  if (paid.changed) await textDebtPaid(getProviders().sms, paid.debt, `${await baseUrl()}/settle`);
+  back("/settle", "notice", "Marked as paid.");
+}
+
+// ── Development only: pretend Interac ─────────────────────────────────────────
+
+/** Sends a pretend Interac email through the same code a real one goes through. */
+async function deliverFake(email: InboundEmail): Promise<string> {
+  const origin = await baseUrl();
+  const handled = await handleInboundEmail(getDb(), email, new Date(), {
+    extraHosts: [new URL(origin).host],
+  });
+  if (handled.paid) await textDebtPaid(getProviders().sms, handled.paid, `${origin}/settle`);
+  return handled.outcome;
+}
+
+/** /dev/inbox: Interac tells the receiver the money arrived, or tells the payer they were asked for it. */
+export async function fakeInteracEmailAction(fd: FormData): Promise<void> {
+  if (!inboundIsFake()) notFound();
+  const debt = await debtById(getDb(), str(fd, "debtId"));
+  if (!debt) back("/dev/inbox", "error", "No such debt.");
+  const withCode = str(fd, "withCode") !== "no";
+  const message = withCode ? `Housepot ${debt.code}` : "chores";
+  const origin = await baseUrl();
+  const email =
+    str(fd, "kind") === "request"
+      ? fakeRequestEmail({
+          to: await forwardingAddress(getDb(), debt.fromUserId),
+          requesterName: debt.toName,
+          amountCents: debt.amountCents,
+          message,
+          url: `${origin}/dev/fake-interac/${debt.id}`,
+        })
+      : fakeReceivedEmail({
+          to: await forwardingAddress(getDb(), debt.toUserId),
+          senderName: debt.fromName.toUpperCase(),
+          amountCents: debt.amountCents,
+          message,
+        });
+  back("/dev/inbox", "notice", `Delivered. Outcome: ${await deliverFake(email)}.`);
+}
+
+/** The pretend Interac request page's "Accept" button: the money moves, and Interac emails the receiver. */
+export async function fakeInteracAcceptAction(fd: FormData): Promise<void> {
+  if (!inboundIsFake()) notFound();
+  const user = await requireUser("/settle");
+  const debt = await debtById(getDb(), str(fd, "debtId"));
+  if (!debt || debt.fromUserId !== user.id) back("/settle", "error", "That request is not for you.");
+  await markDebtSent(getDb(), { debtId: debt.id, userId: user.id, now: new Date() });
+  const outcome = await deliverFake(
+    fakeReceivedEmail({
+      to: await forwardingAddress(getDb(), debt.toUserId),
+      senderName: debt.fromName.toUpperCase(),
+      amountCents: debt.amountCents,
+      message: `Housepot ${debt.code}`,
+    }),
+  );
+  back(
+    "/settle",
+    "notice",
+    outcome === "paid" ? "Paid. Interac's email cleared it automatically." : `Sent (${outcome}).`,
+  );
+}
+
+/** Runs a settle-up now, for trying the flow without waiting for the 1st. */
+export async function devSettleNowAction(): Promise<void> {
+  if (!inboundIsFake()) notFound();
+  const { house } = await requireMember("/dev/inbox");
+  const debts = await settleUpHouse(getDb(), { houseId: house.id, now: new Date(), reason: "early" });
+  await textNewDebts(getDb(), getProviders().sms, debts, `${await baseUrl()}/settle`);
+  back(
+    "/settle",
+    "notice",
+    debts.length ? `Settled up: ${debts.length} payment(s).` : "Everyone is even: nothing to pay.",
+  );
 }
 
 // ── Operator ──────────────────────────────────────────────────────────────────

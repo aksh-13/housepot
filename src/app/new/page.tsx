@@ -46,8 +46,25 @@ export default async function NewHousePage({ searchParams }: Props) {
               required
             />
           </div>
+          <fieldset className="field">
+            <legend>How money works</legend>
+            <label className="check">
+              <input type="radio" name="moneyMode" value="etransfer" defaultChecked />
+              <span>
+                <strong>Settle up by e-Transfer.</strong> Free. Nobody pays in: once a month, whoever is down
+                sends whoever is up an e-Transfer.
+              </span>
+            </label>
+            <label className="check">
+              <input type="radio" name="moneyMode" value="card" />
+              <span>
+                <strong>Card deposits.</strong> Everyone pays a deposit by card into a pot the app holds. Card
+                fees apply.
+              </span>
+            </label>
+          </fieldset>
           <div className="field">
-            <label htmlFor="deposit">Deposit each person pays in</label>
+            <label htmlFor="deposit">Deposit each person pays in (card deposits only)</label>
             <select id="deposit" name="deposit" className="input" defaultValue="20">
               <option value="10">$10</option>
               <option value="20">$20</option>

@@ -6,10 +6,11 @@ import type { Sms } from "@/providers/sms";
 import { localDate } from "@/time";
 import { logActivity } from "./activity";
 import { ensureTurns } from "./chores";
-import { activeMembers, type House, type Member } from "./houses";
+import { activeMembers, HOUSE_COLUMNS, type House, type Member } from "./houses";
 import { choreBounty, memberBalance } from "./ledger";
 import { applyPaymentEvent } from "./payments";
 import { settleHouse } from "./settlement";
+import { FIRST_REMINDER_MS, settleUpHouse, textNewDebts } from "./settleup";
 import { missTurn } from "./turns";
 
 const TICK_LOCK_KEY = 4827002;
@@ -25,13 +26,16 @@ export type TickSummary = {
   topupRequests: number;
   autoReloads: number;
   settled: number;
+  /** e-Transfer houses: debts created by settle-ups, and payment reminders sent. */
+  debtsCreated: number;
+  debtReminders: number;
   errors: number;
   /** Another tick was already running, so this one did nothing. */
   skippedLocked?: true;
 };
 
 type Providers = { sms: Sms; payments: Payments };
-type Ctx = { db: Db; p: Providers; now: Date; link: string; summary: TickSummary };
+type Ctx = { db: Db; p: Providers; now: Date; link: string; settleLink: string; summary: TickSummary };
 
 /** A text that fails to send must never stop money from being handled correctly. */
 async function send(ctx: Ctx, to: string, body: string): Promise<void> {
@@ -41,9 +45,6 @@ async function send(ctx: Ctx, to: string, body: string): Promise<void> {
     console.error(`Text to ${to} failed:`, err instanceof Error ? err.message : err);
   }
 }
-
-const HOUSE_COLUMNS = `id, name, invite_code as "inviteCode", deposit_cents as "depositCents", tz, paused,
-  settlement_date as "settlementDate"`;
 
 async function chargeMisses(ctx: Ctx, house: House, members: Member[]): Promise<void> {
   const overdue = await ctx.db.query<{
@@ -184,7 +185,66 @@ async function requestTopups(ctx: Ctx, house: House, members: Member[]): Promise
   }
 }
 
+/**
+ * Nudges people who have not paid a settle-up debt: once a day after the settle-up, and once more
+ * when it becomes overdue (from then on they cannot claim bounties). Each reminder is claimed in the
+ * database before it is sent, so it goes out once however often the tick runs.
+ */
+async function remindDebts(ctx: Ctx, house: House): Promise<void> {
+  const due = await ctx.db.query<{
+    id: string;
+    reminders: number;
+    amount_cents: number;
+    code: string;
+    from_phone: string;
+    to_name: string;
+    overdue: boolean;
+  }>(
+    `select d.id, d.reminders, d.amount_cents, d.code, fu.phone as from_phone,
+            coalesce(tu.name, 'Housemate') as to_name, d.due_at <= $2 as overdue
+     from debts d
+     join members fm on fm.id = d.from_member_id join users fu on fu.id = fm.user_id
+     join members tm on tm.id = d.to_member_id join users tu on tu.id = tm.user_id
+     where d.house_id = $1 and d.status = 'owed'
+       and ((d.reminders = 0 and d.created_at <= $3) or (d.reminders = 1 and d.due_at <= $2))`,
+    [house.id, ctx.now, new Date(ctx.now.getTime() - FIRST_REMINDER_MS)],
+  );
+  for (const d of due.rows) {
+    const next = d.overdue ? 2 : 1;
+    const claimed = await ctx.db.query(
+      "update debts set reminders = $2 where id = $1 and reminders < $2 and status = 'owed'",
+      [d.id, next],
+    );
+    if (claimed.rowCount === 0) continue;
+    const amount = formatCents(d.amount_cents);
+    await send(
+      ctx,
+      d.from_phone,
+      d.overdue
+        ? `Your ${amount} to ${d.to_name} is overdue. You cannot win chore money until it is paid. Put ${d.code} in the e-Transfer message: ${ctx.settleLink}`
+        : `Reminder: you owe ${d.to_name} ${amount}. Put ${d.code} in the e-Transfer message: ${ctx.settleLink}`,
+    );
+    ctx.summary.debtReminders += 1;
+  }
+}
+
+async function tickEtransferHouse(ctx: Ctx, house: House): Promise<void> {
+  // Settling up does not stop the house: unlike a card house nobody has to pay back in.
+  if (house.settlementDate <= localDate(ctx.now, house.tz)) {
+    const debts = await settleUpHouse(ctx.db, { houseId: house.id, now: ctx.now, reason: "scheduled" });
+    ctx.summary.settled += 1;
+    ctx.summary.debtsCreated += debts.length;
+    await textNewDebts(ctx.db, ctx.p.sms, debts, ctx.settleLink);
+  }
+  await remindDebts(ctx, house);
+  if (house.paused) return;
+  await chargeMisses(ctx, house, await activeMembers(ctx.db, house.id));
+  ctx.summary.turnsCreated += await ensureTurns(ctx.db, house.id, ctx.now);
+  await sendReminders(ctx, house, await activeMembers(ctx.db, house.id));
+}
+
 async function tickHouse(ctx: Ctx, house: House): Promise<void> {
+  if (house.moneyMode === "etransfer") return tickEtransferHouse(ctx, house);
   if (house.settlementDate <= localDate(ctx.now, house.tz)) {
     await settleHouse(ctx.db, ctx.p.payments, { houseId: house.id, now: ctx.now });
     ctx.summary.settled += 1;
@@ -213,6 +273,8 @@ export async function runTick(db: Db, p: Providers, now: Date, baseUrl: string):
     topupRequests: 0,
     autoReloads: 0,
     settled: 0,
+    debtsCreated: 0,
+    debtReminders: 0,
     errors: 0,
   };
   // The lock lives in its own transaction; the work below uses ordinary connections.
@@ -222,7 +284,7 @@ export async function runTick(db: Db, p: Providers, now: Date, baseUrl: string):
     ]);
     if (!got.rows[0].locked) return { ...summary, skippedLocked: true as const };
 
-    const ctx: Ctx = { db, p, now, link: `${baseUrl}/house`, summary };
+    const ctx: Ctx = { db, p, now, link: `${baseUrl}/house`, settleLink: `${baseUrl}/settle`, summary };
     const houses = await db.query<House>(`select ${HOUSE_COLUMNS} from houses order by created_at`);
     for (const house of houses.rows) {
       try {

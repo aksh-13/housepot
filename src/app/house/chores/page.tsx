@@ -110,7 +110,7 @@ export default async function ChoresPage({ searchParams }: Props) {
 
   return (
     <main className="shell">
-      <Masthead current="chores" />
+      <Masthead current="chores" settle={house.moneyMode === "etransfer"} />
       <Flash params={await searchParams} />
       <h1 className="house-name">Chores</h1>
 

@@ -5,6 +5,7 @@ import { logActivity } from "./activity";
 import { DISPUTE_WINDOW_MS } from "./disputes";
 import { activeMembers, getHouse, memberById } from "./houses";
 import { choreBounty, memberBalance, transfer } from "./ledger";
+import { type CreatedDebt, settleUpHouse } from "./settleup";
 import { skipWaitingTurnsOf } from "./turns";
 
 export type CashOut = { refundedCents: number; manualCents: number; writtenOffCents: number };
@@ -133,7 +134,8 @@ export async function cashOutMember(
   return result;
 }
 
-type LeaveResult = { ok: true } | { ok: false; error: string };
+/** debts: in an e-Transfer house, leaving settles the house up and these are the new debts to text about. */
+type LeaveResult = { ok: true; debts?: CreatedDebt[] } | { ok: false; error: string };
 
 /**
  * Cashes the member out and removes them from the house and its rotation.
@@ -159,6 +161,20 @@ export async function leaveHouse(
         "You finished a chore in the last 24 hours. You can leave once the 24 hours to dispute it have passed.",
     };
   }
+  const house = await getHouse(db, member.houseId);
+  if (house?.moneyMode === "etransfer") {
+    // Nothing to cash out: the whole house settles up, so the leaver ends at zero and any money
+    // they owe or are owed becomes an ordinary debt that outlives their membership.
+    const debts = await db.tx(async (t) => {
+      await skipWaitingTurnsOf(t, a.memberId, a.now);
+      const created = await settleUpHouse(t, { houseId: member.houseId, now: a.now, reason: "leaving" });
+      await t.query("update members set status = 'left' where id = $1", [a.memberId]);
+      await t.query("delete from close_votes where member_id = $1", [a.memberId]);
+      await logActivity(t, { houseId: member.houseId, memberId: a.memberId, kind: "left", now: a.now });
+      return created;
+    });
+    return { ok: true, debts };
+  }
   await db.tx(async (t) => {
     await skipWaitingTurnsOf(t, a.memberId, a.now);
     await cashOutMember(t, payments, a);
@@ -180,6 +196,11 @@ export async function settleHouse(
 ): Promise<void> {
   const house = await getHouse(db, a.houseId);
   if (!house) return;
+  if (house.moneyMode === "etransfer") {
+    // Nothing is held, so there is nothing to cash out: settle up instead.
+    await settleUpHouse(db, { houseId: a.houseId, now: a.now, reason: "scheduled" });
+    return;
+  }
   await db.tx(async (t) => {
     await lock(t, `house:${a.houseId}`);
     // Chore locks come before turn locks everywhere, so this cannot deadlock with a claim.
@@ -238,14 +259,18 @@ export async function settleHouse(
   });
 }
 
-/** A vote to cash everyone out now. The pot closes when more than half of paid-up housemates agree. */
+/**
+ * A vote to cash everyone out now (card house) or settle up now (e-Transfer house). It happens when
+ * more than half of the active housemates agree.
+ */
 export async function voteClosePot(
   db: Db,
   payments: Payments,
   a: { memberId: string; now: Date },
-): Promise<{ closed: boolean; votes: number; needed: number }> {
+): Promise<{ closed: boolean; votes: number; needed: number; debts?: CreatedDebt[] }> {
   const member = await memberById(db, a.memberId);
   if (!member) return { closed: false, votes: 0, needed: 0 };
+  const house = await getHouse(db, member.houseId);
   return db.tx(async (t) => {
     await lock(t, `house:${member.houseId}`);
     const active = (await activeMembers(t, member.houseId)).map((m) => m.id);
@@ -262,6 +287,10 @@ export async function voteClosePot(
     const votes = cast.rows.filter((r) => active.includes(r.member_id)).length;
     const needed = Math.floor(active.length / 2) + 1;
     if (votes < needed) return { closed: false, votes, needed };
+    if (house?.moneyMode === "etransfer") {
+      const debts = await settleUpHouse(t, { houseId: member.houseId, now: a.now, reason: "early" });
+      return { closed: true, votes, needed, debts };
+    }
     await settleHouse(t, payments, { houseId: member.houseId, now: a.now });
     return { closed: true, votes, needed };
   });

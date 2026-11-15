@@ -1,13 +1,17 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 
-type Tab = "house" | "chores" | "settings";
+type Tab = "house" | "chores" | "settle" | "settings";
 
-/** The top of every signed-in page: the wordmark and the three places you can go. */
-export function Masthead({ current }: { current?: Tab }) {
+/**
+ * The top of every signed-in page: the wordmark and the places you can go. Houses that settle up
+ * by e-Transfer also get a "Settle up" tab.
+ */
+export function Masthead({ current, settle = false }: { current?: Tab; settle?: boolean }) {
   const tabs: [Tab, string, string][] = [
     ["house", "House", "/house"],
     ["chores", "Chores", "/house/chores"],
+    ...(settle ? ([["settle", "Settle up", "/settle"]] as [Tab, string, string][]) : []),
     ["settings", "Settings", "/house/settings"],
   ];
   return (
