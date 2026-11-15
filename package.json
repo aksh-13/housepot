@@ -1,0 +1,36 @@
+{
+  "name": "housepot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "test": "vitest run",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "typecheck": "tsc --noEmit",
+    "db:up": "sh scripts/dev-db.sh",
+    "db:migrate": "node scripts/migrate.mjs"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1169.0",
+    "luxon": "^3.7.2",
+    "next": "^15.5.29",
+    "pg": "^8.23.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "stripe": "^23.1.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.6.7",
+    "@types/luxon": "^3.7.6",
+    "@types/node": "^20.19.43",
+    "@types/pg": "^8.23.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  }
+}
