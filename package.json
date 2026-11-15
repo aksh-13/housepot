@@ -12,7 +12,7 @@
     "format": "biome check --write .",
     "typecheck": "tsc --noEmit",
     "db:up": "sh scripts/dev-db.sh",
-    "db:migrate": "node scripts/migrate.mjs",
+    "db:migrate": "node --env-file=.env.local scripts/migrate.mjs",
     "k8s:up": "sh scripts/kind-up.sh",
     "k8s:down": "sh scripts/kind-down.sh"
   },
