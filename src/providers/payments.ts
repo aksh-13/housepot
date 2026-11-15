@@ -47,7 +47,7 @@ export interface Payments {
   /** Sends money back to the card that made the payment. */
   refund(a: RefundArgs): Promise<{ ok: boolean }>;
   /** Turns a webhook request into an event, or null when it is not a genuine successful payment. */
-  parseWebhook(rawBody: string, signature: string | null): Promise<PaymentEvent | null>;
+  parseWebhook(rawBody: string, signature: string | null): Promise<PaymentEvent | "ignored" | null>;
 }
 
 const PURPOSES: PaymentPurpose[] = ["deposit", "topup", "auto_reload"];
@@ -116,6 +116,7 @@ export function fakePayments(): FakePayments {
     },
     async refund(a) {
       if (a.providerRef.startsWith("norefund")) return { ok: false };
+      if (a.providerRef.startsWith("unknown")) throw new Error("network timeout");
       refunds.push(a);
       return { ok: true };
     },
@@ -123,6 +124,7 @@ export function fakePayments(): FakePayments {
       if (signature !== "fake") return null;
       try {
         const e = JSON.parse(rawBody);
+        if (typeof e?.type === "string" && e.type !== "payment_succeeded") return "ignored";
         return validEvent(e) ? e : null;
       } catch {
         return null;
@@ -220,8 +222,14 @@ export function stripePayments(env: StripeEnv): Payments {
           { idempotencyKey: a.idempotencyKey },
         );
         return { ok: true };
-      } catch {
-        return { ok: false };
+      } catch (err) {
+        // Only a definite "no" from Stripe may be treated as a failed refund. A timeout or a server
+        // error means the refund may have gone through, so it is rethrown and retried later.
+        const definite =
+          err instanceof Stripe.errors.StripeInvalidRequestError ||
+          err instanceof Stripe.errors.StripeCardError;
+        if (definite) return { ok: false };
+        throw err;
       }
     },
 
@@ -233,9 +241,10 @@ export function stripePayments(env: StripeEnv): Payments {
       } catch {
         return null;
       }
-      if (event.type !== "checkout.session.completed") return null;
+      // The signature is good, so anything below that we do not act on is acknowledged, not rejected.
+      if (event.type !== "checkout.session.completed") return "ignored";
       const session = event.data.object;
-      if (session.payment_status !== "paid" || typeof session.payment_intent !== "string") return null;
+      if (session.payment_status !== "paid" || typeof session.payment_intent !== "string") return "ignored";
       const candidate = {
         type: "payment_succeeded",
         providerRef: session.payment_intent,

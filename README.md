@@ -14,6 +14,7 @@ Built for student houses, where everyone knows whose turn it is and nobody does 
 6. If nobody claims it, the money rolls over to the next person who does that chore on time.
 7. Any housemate can dispute a "done" within 24 hours. If more than half of the others agree, it counts as a miss.
 8. At the end of term everyone is cashed out and the pot restarts. Money goes back to the card that paid it; winnings on top are sent by e-Transfer.
+   Leaving early cashes you out the same way, but it is not a way out of a charge: a turn waiting on you counts as skipped, you cannot leave within 24 hours of finishing a chore (it can still be disputed), and a debt written off when you leave comes back if you rejoin.
 9. Optional auto-reload: save your card and it tops you back up when you hit $0.
 10. Anyone can pause the house for a break. Nothing is assigned or charged while paused.
 
@@ -45,7 +46,7 @@ curl -X POST -H "Authorization: Bearer dev-tick-secret" http://localhost:3000/ap
 ### Tests and checks
 
 ```sh
-pnpm test        # 173 tests against a real Postgres (pnpm db:up starts it)
+pnpm test        # 186 tests against a real Postgres (pnpm db:up starts it)
 pnpm lint        # Biome: lint and formatting
 pnpm typecheck
 pnpm build
@@ -145,6 +146,7 @@ Not done yet. In order:
 4. **A database and photo storage.** Any managed Postgres and any S3-compatible bucket (S3, Cloudflare R2).
 5. **A cluster and a domain.** Any Kubernetes cluster with the nginx ingress controller and cert-manager. Put your domain in `k8s/overlays/prod/ingress.yaml` and `kustomization.yaml`, fill in `secret.env`, then `kubectl apply -k k8s/overlays/prod`.
 6. **Set `OPERATOR_PHONES`** to your number so you can see pending e-Transfers at `/operator`.
+7. **Let the cluster pull the image.** The repo is private, so the image on ghcr.io is too. Either make the package public, or create a pull secret named `ghcr-pull` in the `housepot` namespace (`kubectl create secret docker-registry ghcr-pull --docker-server=ghcr.io --docker-username=aksh-13 --docker-password=<a token with read:packages>`). The production overlay already refers to it.
 
 ## Known limits
 

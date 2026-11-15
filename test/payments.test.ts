@@ -107,9 +107,10 @@ test("checkout through the fake provider carries an event that the webhook reads
     feeCents: 91,
     purpose: "deposit",
   });
-  expect(event?.customerRef).toBeTruthy();
+  if (!event || event === "ignored") throw new Error("expected a payment event");
+  expect(event.customerRef).toBeTruthy();
 
-  await applyPaymentEvent(db, event!, NOW);
+  await applyPaymentEvent(db, event, NOW);
   expect(await memberBalance(db, h.memberId)).toBe(2000);
 });
 

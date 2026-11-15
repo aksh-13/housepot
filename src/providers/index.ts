@@ -14,6 +14,12 @@ function need(name: string): string {
   return value;
 }
 
+function oneOf(name: string, value: string, allowed: string[]): void {
+  if (!allowed.includes(value)) {
+    throw new Error(name + " must be one of " + allowed.join(", ") + ', but it is "' + value + '"');
+  }
+}
+
 export const smsIsFake = () => (process.env.SMS_PROVIDER ?? "fake") === "fake";
 export const paymentsAreFake = () => (process.env.PAYMENTS_PROVIDER ?? "fake") === "fake";
 
@@ -26,6 +32,10 @@ export function getProviders(): Providers {
   const paymentsKind = process.env.PAYMENTS_PROVIDER ?? "fake";
   const storageKind = process.env.STORAGE_PROVIDER ?? "disk";
   const photoDir = process.env.PHOTO_DIR ?? path.resolve(process.cwd(), ".data/photos");
+  // A typo must never quietly select the fake provider: in production that would mean free deposits.
+  oneOf("SMS_PROVIDER", smsKind, ["fake", "twilio"]);
+  oneOf("PAYMENTS_PROVIDER", paymentsKind, ["fake", "stripe"]);
+  oneOf("STORAGE_PROVIDER", storageKind, ["disk", "s3"]);
   const key = [smsKind, paymentsKind, storageKind, photoDir].join("|");
   if (cache.__housepotProviders?.key === key) return cache.__housepotProviders.providers;
 

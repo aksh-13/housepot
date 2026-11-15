@@ -101,6 +101,7 @@ test("pausing cancels turns that are waiting, and is recorded in the activity fe
   const u1 = await makeUser("Ana");
   const h = await createHouse(db, { userId: u1, houseName: "One", now: NOW });
   if (!h.ok) throw new Error("setup");
+  await db.query("update members set status = 'active' where id = $1", [h.memberId]); // paid in
   const chore = await db.query(
     "insert into chores (house_id, name, schedule_kind, weekday, deadline_time, skip_price_cents) values ($1, 'Garbage', 'weekly', 4, '21:00', 500) returning id",
     [h.houseId],

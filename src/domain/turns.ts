@@ -22,6 +22,7 @@ const fail = (error: string): Result => ({ ok: false, error });
 
 /** Reads a turn and locks it for the rest of the transaction, so two actions on it cannot interleave. */
 async function lockTurn(t: Db, turnId: string): Promise<TurnRow | null> {
+  await lockChoreOfTurn(t, turnId);
   const { rows } = await t.query<TurnRow>(
     `select t.id, t.chore_id, t.house_id, t.assignee_member_id, t.due_at, t.status,
             c.name as chore_name, c.skip_price_cents
@@ -29,6 +30,31 @@ async function lockTurn(t: Db, turnId: string): Promise<TurnRow | null> {
     [turnId],
   );
   return rows[0] ?? null;
+}
+
+/**
+ * Locks the chore for the rest of the transaction. A chore's bounty can be collected through two
+ * different turns at once (the open one being claimed, and the next one being finished on time),
+ * so everything that touches a turn takes this lock first. Always taken before any turn's own
+ * lock, never after, so two actions can never end up waiting on each other.
+ */
+export async function lockChoreOfTurn(t: Db, turnId: string): Promise<void> {
+  await t.query(
+    "select c.id from chores c join turns tn on tn.chore_id = c.id where tn.id = $1 for update of c",
+    [turnId],
+  );
+}
+
+/** A member who leaves with turns waiting on them is charged as if they had skipped each one. */
+export async function skipWaitingTurnsOf(t: Db, memberId: string, now: Date): Promise<void> {
+  const waiting = await t.query<{ id: string }>(
+    "select id from turns where assignee_member_id = $1 and status = 'assigned' order by due_at",
+    [memberId],
+  );
+  for (const row of waiting.rows) {
+    const turn = await lockTurn(t, row.id);
+    if (turn && turn.status === "assigned") await openTurn(t, turn, "skip", now);
+  }
 }
 
 async function photoBelongsTo(t: Db, photoId: string, houseId: string): Promise<boolean> {
@@ -151,6 +177,7 @@ type ClaimArgs = { turnId: string; memberId: string; photoId: string; now: Date 
  */
 export async function claimBounty(db: Db, a: ClaimArgs): Promise<Result> {
   return db.tx(async (t) => {
+    await lockChoreOfTurn(t, a.turnId);
     const found = await t.query<{ house_id: string }>("select house_id from turns where id = $1", [a.turnId]);
     const houseId = found.rows[0]?.house_id;
     const member = await memberById(t, a.memberId);

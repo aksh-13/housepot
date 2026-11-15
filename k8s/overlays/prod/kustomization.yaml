@@ -18,6 +18,18 @@ images:
     newName: ghcr.io/aksh-13/housepot
     newTag: latest
 
+# The image lives in a private registry, so the pods need a pull secret. Create it once
+# (see "Going live" in the README), or make the package public and delete this patch.
+patches:
+  - target:
+      kind: Deployment
+      name: web
+    patch: |-
+      - op: add
+        path: /spec/template/spec/imagePullSecrets
+        value:
+          - name: ghcr-pull
+
 configMapGenerator:
   - name: housepot-config
     literals:

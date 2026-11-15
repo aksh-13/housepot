@@ -45,7 +45,8 @@ export async function disputableTurnIds(
   now: Date,
 ): Promise<Set<string>> {
   const { rows } = await db.query<{ id: string }>(
-    `select t.id from turns t left join disputes d on d.turn_id = t.id
+    `select t.id from turns t
+       left join disputes d on d.turn_id = t.id and d.completion_at = t.completed_at
      where t.house_id = $1 and t.status in ('done', 'claimed') and d.id is null
        and t.completed_by_member_id <> $2 and t.completed_at >= $3`,
     [houseId, memberId, new Date(now.getTime() - DISPUTE_WINDOW_MS)],

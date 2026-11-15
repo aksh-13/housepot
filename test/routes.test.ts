@@ -234,8 +234,8 @@ test("a finished chore can be disputed by the others for 24 hours, once", async 
   expect([...(await disputableTurnIds(db, house.houseId, b, in25h))]).toEqual([]);
 
   await db.query(
-    "insert into disputes (turn_id, house_id, raised_by_member_id, accused_member_id) values ($1, $2, $3, $4)",
-    [turnId, house.houseId, b, a],
+    "insert into disputes (turn_id, house_id, raised_by_member_id, accused_member_id, completion_at) values ($1, $2, $3, $4, $5)",
+    [turnId, house.houseId, b, a, NOW],
   );
   expect([...(await disputableTurnIds(db, house.houseId, b, in1h))]).toEqual([]);
   // claimBounty is imported so the claimed path stays type-checked alongside done.

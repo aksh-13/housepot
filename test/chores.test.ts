@@ -153,7 +153,11 @@ test("housemates who have not paid or who have left are never given a turn", asy
 
 test("a house where nobody has paid gets no turns", async () => {
   const house = await makeHouse(2, { active: 0 });
-  await garbage(house);
+  // Unpaid housemates cannot add chores, so this one is put in place directly.
+  await db.query(
+    "insert into chores (house_id, name, schedule_kind, weekday, deadline_time, skip_price_cents) values ($1, 'Garbage', 'weekly', 4, '21:00', 500)",
+    [house.houseId],
+  );
   expect(await ensureTurns(db, house.houseId, NOW)).toBe(0);
   expect(await turns()).toEqual([]);
 });

@@ -2,6 +2,7 @@ import type { Db } from "@/db";
 import { logActivity } from "./activity";
 import { activeMembers, memberById } from "./houses";
 import { transfer } from "./ledger";
+import { lockChoreOfTurn } from "./turns";
 
 export const DISPUTE_WINDOW_MS = 24 * 60 * 60_000;
 
@@ -25,6 +26,7 @@ type DisputedTurn = {
 const fail = (error: string): Fail => ({ ok: false, error });
 
 async function lockTurn(t: Db, turnId: string): Promise<DisputedTurn | null> {
+  await lockChoreOfTurn(t, turnId);
   const { rows } = await t.query<DisputedTurn>(
     `select t.id, t.chore_id, t.house_id, t.status, t.completed_by_member_id, t.completed_at, t.payout_cents,
             c.name as chore_name, c.skip_price_cents
@@ -120,9 +122,10 @@ export async function raiseDispute(db: Db, a: RaiseArgs): Promise<RaiseResult> {
       return fail("The 24 hours to dispute this have passed.");
     }
     const inserted = await t.query<{ id: string }>(
-      `insert into disputes (turn_id, house_id, raised_by_member_id, accused_member_id, created_at)
-       values ($1, $2, $3, $4, $5) on conflict (turn_id) do nothing returning id`,
-      [turn.id, turn.house_id, a.memberId, turn.completed_by_member_id, a.now],
+      // One dispute per completion: a turn reopened by a dispute and finished again can be disputed again.
+      `insert into disputes (turn_id, house_id, raised_by_member_id, accused_member_id, created_at, completion_at)
+       values ($1, $2, $3, $4, $5, $6) on conflict (turn_id, completion_at) do nothing returning id`,
+      [turn.id, turn.house_id, a.memberId, turn.completed_by_member_id, a.now, turn.completed_at],
     );
     if (inserted.rows.length === 0) return fail("This has already been disputed.");
     const disputeId = inserted.rows[0].id;

@@ -159,14 +159,15 @@ test("marking a hand payout as sent takes it off the list", async () => {
   expect(await pendingManualPayouts(db)).toEqual([]);
 });
 
-test("leaving cashes you out, cancels your waiting turn, and the rotation carries on without you", async () => {
+test("leaving cashes you out, counts your waiting turn as skipped, and the rotation carries on without you", async () => {
   await setup(3);
   await ensureTurns(db, house.houseId, NOW); // ids[0] is up
   await leaveHouse(db, payments, { memberId: ids[0], now: NOW });
 
   expect(await memberBalance(db, ids[0])).toBe(0);
   expect((await activeMembers(db, house.houseId)).map((m) => m.id)).toEqual([ids[1], ids[2]]);
-  expect((await db.query("select status from turns")).rows).toEqual([{ status: "cancelled" }]);
+  expect((await db.query("select status from turns")).rows).toEqual([{ status: "open" }]);
+  expect(payments.refunds.map((r) => r.amountCents)).toEqual([1500]);
   expect(await memberForUser(db, house.members[0].userId)).toBeNull();
 
   await ensureTurns(db, house.houseId, NOW);

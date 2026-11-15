@@ -2,8 +2,10 @@ import type { Db } from "@/db";
 import type { Payments } from "@/providers/payments";
 import { nextTermEnd } from "@/time";
 import { logActivity } from "./activity";
+import { DISPUTE_WINDOW_MS } from "./disputes";
 import { activeMembers, getHouse, memberById } from "./houses";
 import { choreBounty, memberBalance, transfer } from "./ledger";
+import { skipWaitingTurnsOf } from "./turns";
 
 export type CashOut = { refundedCents: number; manualCents: number; writtenOffCents: number };
 
@@ -12,10 +14,23 @@ async function lock(t: Db, key: string): Promise<void> {
   await t.query("select pg_advisory_xact_lock(hashtext($1))", [key]);
 }
 
+type PaymentRow = {
+  id: string;
+  provider_ref: string;
+  amount_cents: number;
+  refunded_cents: number;
+  attempt_id: string | null;
+  attempt_cents: number | null;
+};
+
 /**
  * Empties a member's balance. Money goes back to the cards that paid it in, newest payment first.
- * Anything above what they paid in (winnings), or that the card processor refuses, is queued for
- * the operator to send by e-Transfer. A debt is written off.
+ * Anything above what they paid in (winnings), or that the card processor definitely refuses, is
+ * queued for the operator to send by e-Transfer. A debt is written off.
+ *
+ * Each refund is written down (through db.root, so it survives a rollback) before the card
+ * processor is asked. If the answer never arrives, this throws and changes nothing; the next call
+ * repeats the very same request, which the processor recognises instead of refunding twice.
  */
 export async function cashOutMember(
   db: Db,
@@ -29,91 +44,129 @@ export async function cashOutMember(
 
   await db.tx(async (t) => {
     await lock(t, `member:${a.memberId}`);
-    const balance = await memberBalance(t, a.memberId);
-    if (balance === 0) return;
+    let remaining = await memberBalance(t, a.memberId);
 
-    if (balance < 0) {
+    const paid = await t.query<PaymentRow>(
+      `select p.id, p.provider_ref, p.amount_cents, p.refunded_cents,
+              ra.id as attempt_id, ra.amount_cents as attempt_cents
+       from payments p left join refund_attempts ra on ra.payment_id = p.id and ra.status = 'pending'
+       where p.member_id = $1 order by p.created_at desc, p.id`,
+      [a.memberId],
+    );
+    for (const p of paid.rows) {
+      // A refund left pending by an earlier, interrupted cash-out is always finished first,
+      // with its original amount.
+      let attemptId = p.attempt_id;
+      let amountCents = p.attempt_cents ?? 0;
+      if (!attemptId) {
+        amountCents = Math.min(remaining, p.amount_cents - p.refunded_cents);
+        if (amountCents <= 0) continue;
+        const created = await t.root.query<{ id: string }>(
+          "insert into refund_attempts (payment_id, amount_cents, created_at) values ($1, $2, $3) returning id",
+          [p.id, amountCents, a.now],
+        );
+        attemptId = created.rows[0].id;
+      }
+
+      let refund: { ok: boolean };
+      try {
+        refund = await payments.refund({
+          providerRef: p.provider_ref,
+          amountCents,
+          idempotencyKey: `refund:${attemptId}`,
+        });
+      } catch (err) {
+        throw new Error(
+          `The refund for payment ${p.id} did not get an answer, so nothing was changed. Run the cash-out again. (${err instanceof Error ? err.message : err})`,
+        );
+      }
+      if (!refund.ok) {
+        await t.root.query("update refund_attempts set status = 'failed' where id = $1", [attemptId]);
+        continue;
+      }
+      // Marked inside the transaction: if the rest is rolled back, the attempt stays pending and
+      // the retry asks the processor again with the same key.
+      await t.query("update refund_attempts set status = 'succeeded' where id = $1", [attemptId]);
+      await t.query("update payments set refunded_cents = refunded_cents + $2 where id = $1", [
+        p.id,
+        amountCents,
+      ]);
+      await transfer(t, {
+        houseId,
+        from: { memberId: a.memberId },
+        to: "external",
+        amountCents,
+        kind: "cashout_refund",
+      });
+      result.refundedCents += amountCents;
+      remaining -= amountCents;
+    }
+
+    if (remaining > 0) {
+      await t.query(
+        "insert into manual_payouts (house_id, member_id, amount_cents, created_at) values ($1, $2, $3, $4)",
+        [houseId, a.memberId, remaining, a.now],
+      );
+      await transfer(t, {
+        houseId,
+        from: { memberId: a.memberId },
+        to: "external",
+        amountCents: remaining,
+        kind: "cashout_manual",
+      });
+      result.manualCents = remaining;
+    } else if (remaining < 0) {
       await transfer(t, {
         houseId,
         from: "external",
         to: { memberId: a.memberId },
-        amountCents: -balance,
+        amountCents: -remaining,
         kind: "writeoff",
       });
-      result.writtenOffCents = -balance;
-    } else {
-      let remaining = balance;
-      const paid = await t.query<{
-        id: string;
-        provider_ref: string;
-        amount_cents: number;
-        refunded_cents: number;
-      }>(
-        `select id, provider_ref, amount_cents, refunded_cents from payments
-         where member_id = $1 and refunded_cents < amount_cents order by created_at desc, id`,
-        [a.memberId],
-      );
-      for (const p of paid.rows) {
-        if (remaining === 0) break;
-        const amountCents = Math.min(remaining, p.amount_cents - p.refunded_cents);
-        const refund = await payments.refund({
-          providerRef: p.provider_ref,
-          amountCents,
-          idempotencyKey: `refund:${p.id}:${p.refunded_cents}`,
-        });
-        if (!refund.ok) continue;
-        await t.query("update payments set refunded_cents = refunded_cents + $2 where id = $1", [
-          p.id,
-          amountCents,
-        ]);
-        await transfer(t, {
-          houseId,
-          from: { memberId: a.memberId },
-          to: "external",
-          amountCents,
-          kind: "cashout_refund",
-        });
-        result.refundedCents += amountCents;
-        remaining -= amountCents;
-      }
-      if (remaining > 0) {
-        await t.query(
-          "insert into manual_payouts (house_id, member_id, amount_cents, created_at) values ($1, $2, $3, $4)",
-          [houseId, a.memberId, remaining, a.now],
-        );
-        await transfer(t, {
-          houseId,
-          from: { memberId: a.memberId },
-          to: "external",
-          amountCents: remaining,
-          kind: "cashout_manual",
-        });
-        result.manualCents = remaining;
-      }
+      result.writtenOffCents = -remaining;
     }
-    await logActivity(t, { houseId, memberId: a.memberId, kind: "cashed_out", data: result, now: a.now });
+
+    if (result.refundedCents || result.manualCents || result.writtenOffCents) {
+      await logActivity(t, { houseId, memberId: a.memberId, kind: "cashed_out", data: result, now: a.now });
+    }
   });
   return result;
 }
 
-/** Cashes the member out and removes them from the house and its rotation. */
+type LeaveResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * Cashes the member out and removes them from the house and its rotation.
+ * Leaving is not a way out of a charge: a turn that is waiting on them counts as skipped, and they
+ * cannot leave while a chore they just finished can still be disputed.
+ */
 export async function leaveHouse(
   db: Db,
   payments: Payments,
   a: { memberId: string; now: Date },
-): Promise<void> {
+): Promise<LeaveResult> {
   const member = await memberById(db, a.memberId);
-  if (!member || member.status === "left") return;
+  if (!member || member.status === "left") return { ok: true };
+  const recent = await db.query(
+    `select 1 from turns where completed_by_member_id = $1 and status in ('done', 'claimed')
+       and completed_at > $2 limit 1`,
+    [a.memberId, new Date(a.now.getTime() - DISPUTE_WINDOW_MS)],
+  );
+  if (recent.rows.length > 0) {
+    return {
+      ok: false,
+      error:
+        "You finished a chore in the last 24 hours. You can leave once the 24 hours to dispute it have passed.",
+    };
+  }
   await db.tx(async (t) => {
+    await skipWaitingTurnsOf(t, a.memberId, a.now);
     await cashOutMember(t, payments, a);
     await t.query("update members set status = 'left', auto_reload = false where id = $1", [a.memberId]);
-    await t.query(
-      "update turns set status = 'cancelled' where assignee_member_id = $1 and status = 'assigned'",
-      [a.memberId],
-    );
     await t.query("delete from close_votes where member_id = $1", [a.memberId]);
     await logActivity(t, { houseId: member.houseId, memberId: a.memberId, kind: "left", now: a.now });
   });
+  return { ok: true };
 }
 
 /**
@@ -129,10 +182,24 @@ export async function settleHouse(
   if (!house) return;
   await db.tx(async (t) => {
     await lock(t, `house:${a.houseId}`);
-    const active = await activeMembers(t, a.houseId);
+    // Chore locks come before turn locks everywhere, so this cannot deadlock with a claim.
+    const chores = await t.query<{ id: string }>(
+      "select id from chores where house_id = $1 order by id for update",
+      [a.houseId],
+    );
 
+    // Then close every turn. Anyone finishing or claiming one at this moment either got in before
+    // these updates (and their money has already moved) or sees a closed turn afterwards.
+    await t.query("update turns set status = 'rolled' where house_id = $1 and status = 'open'", [a.houseId]);
+    await t.query("update turns set status = 'cancelled' where house_id = $1 and status = 'assigned'", [
+      a.houseId,
+    ]);
+    await t.query("update disputes set status = 'expired' where house_id = $1 and status = 'open'", [
+      a.houseId,
+    ]);
+
+    const active = await activeMembers(t, a.houseId);
     if (active.length > 0) {
-      const chores = await t.query<{ id: string }>("select id from chores where house_id = $1", [a.houseId]);
       for (const chore of chores.rows) {
         const bounty = await choreBounty(t, chore.id);
         if (bounty <= 0) continue;
@@ -151,14 +218,6 @@ export async function settleHouse(
         }
       }
     }
-
-    await t.query("update turns set status = 'rolled' where house_id = $1 and status = 'open'", [a.houseId]);
-    await t.query("update turns set status = 'cancelled' where house_id = $1 and status = 'assigned'", [
-      a.houseId,
-    ]);
-    await t.query("update disputes set status = 'expired' where house_id = $1 and status = 'open'", [
-      a.houseId,
-    ]);
 
     const everyone = await t.query<{ id: string }>(
       "select id from members where house_id = $1 and status <> 'left' order by rotation_position",

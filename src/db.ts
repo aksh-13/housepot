@@ -7,6 +7,11 @@ export type Db = {
   query<T = any>(sql: string, params?: unknown[]): Promise<{ rows: T[]; rowCount: number }>;
   /** Runs fn inside one transaction. Called on a Db that is already in a transaction, it joins it. */
   tx<T>(fn: (db: Db) => Promise<T>): Promise<T>;
+  /**
+   * The database outside any transaction. A write made through it is kept even if the surrounding
+   * transaction is rolled back. Used to record intent before calling an outside service.
+   */
+  root: Db;
 };
 
 type Queryable = { query: (sql: string, params?: any[]) => Promise<pg.QueryResult<any>> };
@@ -16,22 +21,23 @@ async function run<T>(q: Queryable, sql: string, params?: unknown[]) {
   return { rows: r.rows as T[], rowCount: r.rowCount ?? 0 };
 }
 
-function clientDb(client: pg.PoolClient): Db {
+function clientDb(client: pg.PoolClient, root: Db): Db {
   const self: Db = {
     query: (sql, params) => run(client, sql, params),
     tx: (fn) => fn(self),
+    root,
   };
   return self;
 }
 
 function poolDb(pool: pg.Pool): Db {
-  return {
+  const self: Db = {
     query: (sql, params) => run(pool, sql, params),
     async tx(fn) {
       const client = await pool.connect();
       try {
         await client.query("begin");
-        const result = await fn(clientDb(client));
+        const result = await fn(clientDb(client, self));
         await client.query("commit");
         return result;
       } catch (err) {
@@ -41,7 +47,11 @@ function poolDb(pool: pg.Pool): Db {
         client.release();
       }
     },
+    get root() {
+      return self;
+    },
   };
+  return self;
 }
 
 const globalForDb = globalThis as unknown as { __housepotDb?: Db };

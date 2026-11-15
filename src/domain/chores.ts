@@ -110,8 +110,8 @@ export async function createChore(db: Db, a: CreateArgs): Promise<{ ok: true; ch
     checkName(a.name) ?? checkTime(a.deadlineTime) ?? checkPrice(skipPriceCents) ?? checkSchedule(a.schedule);
   if (error) return { ok: false, error };
   const member = await memberById(db, a.memberId);
-  if (!member || member.houseId !== a.houseId || member.status === "left") {
-    return { ok: false, error: "Only housemates can add chores." };
+  if (!member || member.houseId !== a.houseId || member.status !== "active") {
+    return { ok: false, error: "Only housemates who have paid in can add chores." };
   }
   const name = a.name.trim().slice(0, 60);
   return db.tx(async (t) => {
@@ -147,8 +147,8 @@ type UpdateArgs = {
 export async function updateChore(db: Db, a: UpdateArgs): Promise<{ ok: true } | Fail> {
   const chore = await getChore(db, a.choreId);
   const member = await memberById(db, a.memberId);
-  if (!chore || !member || member.houseId !== chore.houseId || member.status === "left") {
-    return { ok: false, error: "Only housemates can edit chores." };
+  if (!chore || !member || member.houseId !== chore.houseId || member.status !== "active") {
+    return { ok: false, error: "Only housemates who have paid in can edit chores." };
   }
   const error =
     (a.name !== undefined ? checkName(a.name) : null) ??

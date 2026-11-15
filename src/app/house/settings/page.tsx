@@ -113,7 +113,7 @@ export default async function SettingsPage({ searchParams }: Props) {
               {balance >= 0
                 ? `Your ${formatCents(balance)} goes back to your card. Anything you won on top is sent by e-Transfer within a few days.`
                 : `You owe the house ${formatCents(-balance)}. Leaving writes that off, and your housemates will see it.`}{" "}
-              Your turns go to the next person. This cannot be undone.
+              A turn that is waiting on you counts as skipped. This cannot be undone.
             </p>
             <form action={leaveAction}>
               <SubmitButton className="btn btn-danger btn-block" pendingLabel="Leaving…">

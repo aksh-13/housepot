@@ -14,6 +14,7 @@ export type TransferKind =
   | "cashout_refund"
   | "cashout_manual"
   | "writeoff"
+  | "debt_carried"
   | "escrow_return";
 
 type TransferArgs = {

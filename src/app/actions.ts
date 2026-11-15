@@ -125,7 +125,7 @@ export async function fakePayAction(fd: FormData): Promise<void> {
     back("/house", "error", "That checkout link is broken.");
   }
   const event = await getProviders().payments.parseWebhook(JSON.stringify(payload.event), "fake");
-  if (!event) back("/house", "error", "That checkout link is broken.");
+  if (!event || event === "ignored") back("/house", "error", "That checkout link is broken.");
   // Only the signed-in member may complete their own pretend payment.
   const { member } = await requireMember();
   if (event.memberId !== member.id) back("/house", "error", "That checkout belongs to someone else.");
@@ -318,7 +318,8 @@ export async function pauseAction(fd: FormData): Promise<void> {
   const { member, house } = await requireMember("/house/settings");
   const paused = str(fd, "paused") === "yes";
   const now = new Date();
-  await setPaused(getDb(), { houseId: house.id, memberId: member.id, paused, now });
+  const result = await setPaused(getDb(), { houseId: house.id, memberId: member.id, paused, now });
+  if (!result.ok) back("/house/settings", "error", result.error);
   if (!paused) await ensureTurns(getDb(), house.id, now);
   back(
     "/house/settings",
@@ -346,7 +347,8 @@ export async function closeVoteAction(): Promise<void> {
 
 export async function leaveAction(): Promise<void> {
   const { member } = await requireMember("/house/settings");
-  await leaveHouse(getDb(), getProviders().payments, { memberId: member.id, now: new Date() });
+  const left = await leaveHouse(getDb(), getProviders().payments, { memberId: member.id, now: new Date() });
+  if (!left.ok) back("/house/settings", "error", left.error);
   redirect("/?notice=You%20left%20the%20house%20and%20were%20cashed%20out.");
 }
 

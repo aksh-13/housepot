@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { Db } from "@/db";
 import { nextTermEnd } from "@/time";
 import { logActivity } from "./activity";
+import { transfer } from "./ledger";
 
 export const DEFAULT_DEPOSIT_CENTS = 2000;
 export const DEFAULT_TZ = "America/Toronto";
@@ -136,6 +137,28 @@ export async function joinHouse(db: Db, a: JoinArgs): Promise<{ ok: true; member
   }
   return db.tx(async (t) => {
     const memberId = await addMember(t, house.id, a.userId, a.now);
+    // A debt that was written off when this person left comes back with them, so leaving and
+    // rejoining is not a way to wipe it. The ref makes each old debt carry over exactly once.
+    const oldDebts = await t.query<{ member_id: string; cents: number }>(
+      `select m.id as member_id, coalesce(sum(le.amount_cents), 0)::int as cents
+       from members m
+       join ledger_entries le on le.member_id = m.id
+       join transfers tr on tr.id = le.transfer_id and tr.kind = 'writeoff'
+       where m.house_id = $1 and m.user_id = $2 and m.status = 'left'
+       group by m.id`,
+      [house.id, a.userId],
+    );
+    for (const debt of oldDebts.rows) {
+      if (debt.cents <= 0) continue;
+      await transfer(t, {
+        houseId: house.id,
+        from: { memberId },
+        to: "external",
+        amountCents: debt.cents,
+        kind: "debt_carried",
+        ref: `carry:${debt.member_id}`,
+      });
+    }
     await logActivity(t, { houseId: house.id, memberId, kind: "joined", now: a.now });
     return { ok: true as const, memberId };
   });
@@ -144,7 +167,11 @@ export async function joinHouse(db: Db, a: JoinArgs): Promise<{ ok: true; member
 type PauseArgs = { houseId: string; memberId: string; paused: boolean; now: Date };
 
 /** Pauses or resumes the whole house. While paused nothing is assigned and nothing is charged. */
-export async function setPaused(db: Db, a: PauseArgs): Promise<void> {
+export async function setPaused(db: Db, a: PauseArgs): Promise<{ ok: true } | Fail> {
+  const member = await memberById(db, a.memberId);
+  if (!member || member.houseId !== a.houseId || member.status !== "active") {
+    return { ok: false, error: "Only housemates who have paid in can pause or resume the house." };
+  }
   await db.tx(async (t) => {
     const changed = await t.query("update houses set paused = $2 where id = $1 and paused <> $2", [
       a.houseId,
@@ -163,6 +190,7 @@ export async function setPaused(db: Db, a: PauseArgs): Promise<void> {
       now: a.now,
     });
   });
+  return { ok: true };
 }
 
 export async function setAutoReload(db: Db, memberId: string, on: boolean): Promise<void> {
