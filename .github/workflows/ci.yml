@@ -1,0 +1,126 @@
+# Runs on every pull request and every push to main.
+#
+#   check  lint, type-check, tests against a real Postgres, production build
+#   k8s    render both Kubernetes overlays and validate them against the Kubernetes schemas
+#   image  build the container image; on main, publish it to GitHub's registry (ghcr.io)
+#   smoke  start a throwaway Kubernetes cluster, deploy the app to it, and check it answers
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: housepot_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/housepot_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+
+  k8s:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install kubeconform
+        run: |
+          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | tar -xz -C /usr/local/bin kubeconform
+      - name: Validate the local overlay
+        run: kubectl kustomize k8s/overlays/local | kubeconform -strict -summary
+      - name: Validate the production overlay
+        run: |
+          # The real secret file is never committed; the example has the same keys.
+          cp k8s/overlays/prod/secret.env.example k8s/overlays/prod/secret.env
+          kubectl kustomize k8s/overlays/prod | kubeconform -strict -summary
+
+  image:
+    runs-on: ubuntu-latest
+    needs: [check]
+    # Only this job may publish to the registry.
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Sign in to ghcr.io
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
+            ghcr.io/${{ github.repository }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  smoke:
+    runs-on: ubuntu-latest
+    needs: [check]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create a kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: housepot
+          config: k8s/overlays/local/kind-config.yaml
+      - name: Build the image and load it into the cluster
+        run: |
+          docker build -t housepot:dev .
+          kind load docker-image housepot:dev --name housepot
+      - name: Deploy the local overlay
+        run: |
+          kubectl apply -k k8s/overlays/local
+          kubectl -n housepot rollout status statefulset/postgres --timeout=180s
+          kubectl -n housepot rollout status deployment/minio --timeout=180s
+          kubectl -n housepot rollout status deployment/web --timeout=240s
+      - name: The app answers and can reach its database
+        run: curl --fail --retry 10 --retry-delay 3 --retry-all-errors http://localhost:8642/api/readyz
+      - name: The tick job runs
+        run: |
+          kubectl -n housepot create job --from=cronjob/tick tick-smoke
+          kubectl -n housepot wait --for=condition=complete job/tick-smoke --timeout=120s
+          kubectl -n housepot logs job/tick-smoke
+      - name: Show what went wrong
+        if: failure()
+        run: |
+          kubectl -n housepot get all
+          kubectl -n housepot describe pods
+          kubectl -n housepot logs deployment/web --all-containers --tail=100 || true

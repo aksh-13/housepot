@@ -1,0 +1,52 @@
+# Deploys an already-built image to the production cluster. Manual only: run it from the Actions tab.
+#
+# This does nothing useful until two repository secrets exist (Settings -> Secrets -> Actions):
+#   KUBE_CONFIG      the kubeconfig file for your production cluster
+#   PROD_SECRET_ENV  the full contents of k8s/overlays/prod/secret.env
+# Until then it stops at the first step with a clear message.
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Image tag to deploy (a commit SHA that CI has published)
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      TAG: ${{ inputs.tag }}
+      KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+      PROD_SECRET_ENV: ${{ secrets.PROD_SECRET_ENV }}
+    steps:
+      - name: Check the secrets are set
+        run: |
+          if [ -z "$KUBE_CONFIG" ] || [ -z "$PROD_SECRET_ENV" ]; then
+            echo "::error::Set the KUBE_CONFIG and PROD_SECRET_ENV repository secrets before deploying."
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+      - name: Write the cluster credentials and app secrets
+        run: |
+          umask 077
+          mkdir -p "$RUNNER_TEMP/kube"
+          printf '%s' "$KUBE_CONFIG" > "$RUNNER_TEMP/kube/config"
+          printf '%s\n' "$PROD_SECRET_ENV" > k8s/overlays/prod/secret.env
+      - name: Point the overlay at the chosen image
+        run: |
+          sed -i "s|newTag: .*|newTag: \"$TAG\"|" k8s/overlays/prod/kustomization.yaml
+      - name: Apply and wait for the rollout
+        run: |
+          export KUBECONFIG="$RUNNER_TEMP/kube/config"
+          kubectl apply -k k8s/overlays/prod
+          kubectl -n housepot rollout status deployment/web --timeout=300s
