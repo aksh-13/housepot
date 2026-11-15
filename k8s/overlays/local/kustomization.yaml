@@ -24,6 +24,7 @@ configMapGenerator:
       - BASE_URL=http://localhost:8642
       - SMS_PROVIDER=fake
       - PAYMENTS_PROVIDER=fake
+      - INBOUND_EMAIL_PROVIDER=fake
       - STORAGE_PROVIDER=s3
       - S3_ENDPOINT=http://minio:9000
       - S3_REGION=us-east-1

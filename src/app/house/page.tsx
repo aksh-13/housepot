@@ -7,6 +7,7 @@ import { type ActivityItem, recentActivity } from "@/domain/activity";
 import { listChores } from "@/domain/chores";
 import { openDisputes } from "@/domain/disputes";
 import { houseBalances } from "@/domain/ledger";
+import { debtsForUser } from "@/domain/settleup";
 import { disputableTurnIds, houseTurns, type TurnView } from "@/domain/views";
 import { requireMember } from "@/lib/current";
 import { ago, dateLabel, dueLabel, signedCents } from "@/lib/format";
@@ -61,6 +62,21 @@ function describe(item: ActivityItem, meId: string): { text: string; cents?: num
       return { text: `${who} cashed out` };
     case "settled":
       return { text: "The pot was cashed out and restarted" };
+    case "settled_up": {
+      const n = Number(item.data.payments ?? 0);
+      return {
+        text:
+          n === 0
+            ? "The house settled up: everyone was even"
+            : `The house settled up: ${n} e-Transfer${n === 1 ? "" : "s"} to send`,
+      };
+    }
+    case "debt_sent":
+      return { text: `${who} sent ${item.data.toName} ${formatCents(amount)}` };
+    case "debt_paid":
+      return {
+        text: `${who} paid ${item.data.toName} ${formatCents(amount)}${item.data.via === "email" ? " (checked automatically)" : ""}`,
+      };
     default:
       return { text: item.kind };
   }
@@ -79,17 +95,22 @@ function openReason(turn: TurnView, meId: string): string {
 }
 
 export default async function HousePage({ searchParams }: Props) {
-  const { member, house } = await requireMember();
+  const { user, member, house } = await requireMember();
   const db = getDb();
   const now = new Date();
-  const [balances, turns, disputes, activity, disputable, chores] = await Promise.all([
+  const etransfer = house.moneyMode === "etransfer";
+  const [balances, turns, disputes, activity, disputable, chores, myDebts] = await Promise.all([
     houseBalances(db, house.id),
     houseTurns(db, house.id),
     openDisputes(db, house.id, now),
     recentActivity(db, house.id, 30),
     disputableTurnIds(db, house.id, member.id, now),
     listChores(db, house.id),
+    etransfer ? debtsForUser(db, user.id) : Promise.resolve([]),
   ]);
+  const iOwe = myDebts.filter((d) => d.status !== "paid" && d.fromUserId === user.id);
+  const owedToMe = myDebts.filter((d) => d.status !== "paid" && d.toUserId === user.id);
+  const overdue = iOwe.some((d) => d.dueAt.getTime() < now.getTime());
 
   const me = balances.find((b) => b.memberId === member.id);
   const myBalance = me?.balanceCents ?? 0;
@@ -102,12 +123,39 @@ export default async function HousePage({ searchParams }: Props) {
 
   return (
     <main className="shell">
-      <Masthead current="house" />
+      <Masthead current="house" settle={etransfer} />
       <Flash params={await searchParams} />
       <h1 className="house-name">{house.name}</h1>
 
+      {iOwe.length > 0 && (
+        <section className="callout">
+          <h2>You owe {formatCents(iOwe.reduce((s, d) => s + d.amountCents, 0))} from the last settle-up.</h2>
+          <p>
+            {overdue
+              ? "It is overdue: you cannot win chore money until it is paid."
+              : "Pay by e-Transfer. Housepot spots it landing and marks it paid."}
+          </p>
+          <p>
+            <Link href="/settle" className="btn btn-accent btn-block">
+              Settle up
+            </Link>
+          </p>
+        </section>
+      )}
+      {iOwe.length === 0 && owedToMe.length > 0 && (
+        <p className="flash flash-notice" role="status">
+          {owedToMe.length === 1 ? `${owedToMe[0].fromName} owes` : `${owedToMe.length} housemates owe`} you{" "}
+          {formatCents(owedToMe.reduce((s, d) => s + d.amountCents, 0))}. <Link href="/settle">See it</Link>
+        </p>
+      )}
+      {etransfer && !member.etransferEmail && (
+        <p className="flash flash-notice" role="status">
+          Add your e-Transfer email so housemates can pay you. <Link href="/house/settings">Add it</Link>
+        </p>
+      )}
+
       {/* Asked loudly only when it blocks you: not yet paid in, or nothing left. Otherwise a quiet link in the pot. */}
-      {due > 0 && (!isActive || myBalance <= 0) && (
+      {!etransfer && due > 0 && (!isActive || myBalance <= 0) && (
         <section className="callout">
           <h2>
             {isActive
@@ -168,7 +216,9 @@ export default async function HousePage({ searchParams }: Props) {
                   <form action={skipAction}>
                     <input type="hidden" name="turnId" value={turn.id} />
                     <SubmitButton pendingLabel="Skipping…">
-                      Pay {formatCents(turn.skipPriceCents)} to skip
+                      {etransfer
+                        ? `Skip for ${formatCents(turn.skipPriceCents)}`
+                        : `Pay ${formatCents(turn.skipPriceCents)} to skip`}
                     </SubmitButton>
                   </form>
                 </div>
@@ -271,47 +321,69 @@ export default async function HousePage({ searchParams }: Props) {
         </section>
       )}
 
-      <section className="section">
-        <h2 className="label">The pot</h2>
-        {balances.map((b) => {
-          const delta = b.balanceCents - house.depositCents;
-          return (
+      {etransfer ? (
+        <section className="section">
+          <h2 className="label">This month</h2>
+          {balances.map((b) => (
             <div key={b.memberId} className="row">
               <span>
                 {b.name}
                 {b.memberId === member.id && <span className="muted"> (you)</span>}
               </span>
               <span className="leader" />
-              {b.status === "pending" ? (
-                <span className="small muted">not paid in</span>
-              ) : (
-                <>
-                  <span className={`amt${b.balanceCents < 0 ? " loss" : ""}`}>
-                    {formatCents(b.balanceCents)}
-                  </span>
-                  <span className={`delta ${delta > 0 ? "gain" : "loss"}`}>{signedCents(delta)}</span>
-                </>
-              )}
+              <span className={`amt ${b.balanceCents > 0 ? "gain" : b.balanceCents < 0 ? "loss" : ""}`}>
+                {b.balanceCents === 0 ? "$0" : signedCents(b.balanceCents)}
+              </span>
             </div>
-          );
-        })}
-        <div className="row row-total">
-          <span>Held for the house</span>
-          <span className="leader" />
-          <span className="amt">{formatCents(potTotal)}</span>
-          <span className="delta" />
-        </div>
-        <p className="small muted" style={{ marginTop: "var(--space-3)" }}>
-          Everyone is cashed out on {dateLabel(house.settlementDate)}.
-        </p>
-        {isActive && due > 0 && myBalance > 0 && (
-          <form action={payAction}>
-            <SubmitButton className="btn-quiet" pendingLabel="Opening checkout…">
-              Top up {formatCents(due)} to get back to {formatCents(house.depositCents)}
-            </SubmitButton>
-          </form>
-        )}
-      </section>
+          ))}
+          <p className="small muted" style={{ marginTop: "var(--space-3)" }}>
+            Nobody pays in. On {dateLabel(house.settlementDate)} the house settles up: whoever is down sends
+            whoever is up an e-Transfer.
+          </p>
+        </section>
+      ) : (
+        <section className="section">
+          <h2 className="label">The pot</h2>
+          {balances.map((b) => {
+            const delta = b.balanceCents - house.depositCents;
+            return (
+              <div key={b.memberId} className="row">
+                <span>
+                  {b.name}
+                  {b.memberId === member.id && <span className="muted"> (you)</span>}
+                </span>
+                <span className="leader" />
+                {b.status === "pending" ? (
+                  <span className="small muted">not paid in</span>
+                ) : (
+                  <>
+                    <span className={`amt${b.balanceCents < 0 ? " loss" : ""}`}>
+                      {formatCents(b.balanceCents)}
+                    </span>
+                    <span className={`delta ${delta > 0 ? "gain" : "loss"}`}>{signedCents(delta)}</span>
+                  </>
+                )}
+              </div>
+            );
+          })}
+          <div className="row row-total">
+            <span>Held for the house</span>
+            <span className="leader" />
+            <span className="amt">{formatCents(potTotal)}</span>
+            <span className="delta" />
+          </div>
+          <p className="small muted" style={{ marginTop: "var(--space-3)" }}>
+            Everyone is cashed out on {dateLabel(house.settlementDate)}.
+          </p>
+          {isActive && due > 0 && myBalance > 0 && (
+            <form action={payAction}>
+              <SubmitButton className="btn-quiet" pendingLabel="Opening checkout…">
+                Top up {formatCents(due)} to get back to {formatCents(house.depositCents)}
+              </SubmitButton>
+            </form>
+          )}
+        </section>
+      )}
 
       <section className="section">
         <h2 className="label">Activity</h2>

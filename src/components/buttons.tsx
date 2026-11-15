@@ -109,6 +109,36 @@ export function ShareLink({ url, houseName }: { url: string; houseName: string }
   );
 }
 
+/** Copies one value (an email, a code, an amount) so it can be pasted into the bank's e-Transfer form. */
+export function CopyButton({
+  value,
+  label,
+  className = "btn",
+}: {
+  value: string;
+  label: string;
+  className?: string;
+}) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className={className}
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(value);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        } catch {
+          // The clipboard is blocked. The value is shown on screen to copy by hand.
+        }
+      }}
+    >
+      {copied ? "Copied" : label}
+    </button>
+  );
+}
+
 /** Shows only the schedule fields that match the chosen repeat (weekly, or every N days). */
 export function ScheduleFields({ children, initial }: { children: ReactNode; initial: string }) {
   const [kind, setKind] = useState(initial);

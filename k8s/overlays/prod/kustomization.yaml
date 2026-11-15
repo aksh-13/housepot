@@ -36,6 +36,8 @@ configMapGenerator:
       - BASE_URL=https://housepot.example.com
       - SMS_PROVIDER=twilio
       - PAYMENTS_PROVIDER=stripe
+      - INBOUND_EMAIL_PROVIDER=webhook
+      - INBOUND_EMAIL_DOMAIN=pay.housepot.example
       - STORAGE_PROVIDER=s3
       - S3_REGION=us-east-1
       - S3_BUCKET=housepot

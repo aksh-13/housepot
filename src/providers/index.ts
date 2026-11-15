@@ -22,6 +22,16 @@ function oneOf(name: string, value: string, allowed: string[]): void {
 
 export const smsIsFake = () => (process.env.SMS_PROVIDER ?? "fake") === "fake";
 export const paymentsAreFake = () => (process.env.PAYMENTS_PROVIDER ?? "fake") === "fake";
+/**
+ * fake: the development inbox (/dev/inbox) and pretend Interac page exist, so the whole settle-up
+ * flow can be tried with no email set up. webhook: only real emails, through /api/webhooks/email.
+ */
+export function inboundIsFake(): boolean {
+  const kind = process.env.INBOUND_EMAIL_PROVIDER ?? "fake";
+  // A typo must never quietly leave the pretend Interac pages switched on: anyone could mark debts paid.
+  oneOf("INBOUND_EMAIL_PROVIDER", kind, ["fake", "webhook"]);
+  return kind === "fake";
+}
 
 /**
  * The outside services, chosen by environment variables. With nothing set, everything is fake:
