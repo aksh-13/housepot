@@ -1,0 +1,12 @@
+node_modules/
+.next/
+.env
+.env.local
+.data/
+.bin/
+.kube/
+.superpowers/
+k8s/overlays/prod/secret.env
+*.tsbuildinfo
+next-env.d.ts
+.DS_Store
