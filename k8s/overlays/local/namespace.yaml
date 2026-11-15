@@ -1,0 +1,5 @@
+# Namespace: a named area of the cluster that keeps this app's objects apart from everything else.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: housepot

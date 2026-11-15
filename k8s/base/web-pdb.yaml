@@ -1,0 +1,13 @@
+# PodDisruptionBudget: during planned maintenance (a node being drained or upgraded), Kubernetes
+# must leave at least one web pod running.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: web
+  labels:
+    app.kubernetes.io/component: web
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: web

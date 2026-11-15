@@ -1,0 +1,108 @@
+# Deployment: keeps N identical copies (pods) of the web app running, and replaces them one at a
+# time when a new image is rolled out.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  labels:
+    app.kubernetes.io/component: web
+spec:
+  replicas: 2
+  # Never take a pod away before its replacement is ready, so a rollout has no downtime.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: web
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      # Runs to completion before the web container starts: applies database migrations.
+      # Several pods may start at once; the script takes a database lock so only one migrates.
+      initContainers:
+        - name: migrate
+          image: housepot
+          command: ["node", "scripts/migrate.mjs"]
+          envFrom:
+            - secretRef:
+                name: housepot-secrets
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+      containers:
+        - name: web
+          image: housepot
+          ports:
+            - name: http
+              containerPort: 3000
+          envFrom:
+            - configMapRef:
+                name: housepot-config
+            - secretRef:
+                name: housepot-secrets
+          # startup: give the app time to boot. readiness: only send traffic when the database is
+          # reachable. liveness: restart the container if the process stops answering.
+          startupProbe:
+            httpGet:
+              path: /api/healthz
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /api/readyz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/healthz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          # requests: what the scheduler reserves (and what the autoscaler measures against).
+          # limits: the most the container may use.
+          resources:
+            requests:
+              cpu: 100m
+              memory: 192Mi
+            limits:
+              cpu: 500m
+              memory: 384Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: next-cache
+              mountPath: /app/.next/cache
+      # The image's filesystem is read-only; these are the two places the app may write scratch files.
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: next-cache
+          emptyDir: {}

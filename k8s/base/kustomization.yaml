@@ -1,0 +1,16 @@
+# Everything every environment shares. The overlays (local, prod) add what differs:
+# the namespace, the image tag, settings, secrets, and how traffic gets in.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - web-deployment.yaml
+  - web-service.yaml
+  - web-hpa.yaml
+  - web-pdb.yaml
+  - tick-cronjob.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/name: housepot
+    includeSelectors: false

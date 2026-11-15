@@ -1,0 +1,34 @@
+# Production: the base, plus an Ingress for real traffic. The database and photo store are managed
+# services reached by URL, so there is no Postgres or MinIO here.
+#
+# Before applying: copy secret.env.example to secret.env and fill it in (secret.env is gitignored),
+# and change the host name in ingress.yaml and BASE_URL below to your domain.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: housepot
+
+resources:
+  - namespace.yaml
+  - ../../base
+  - ingress.yaml
+
+images:
+  - name: housepot
+    newName: ghcr.io/aksh-13/housepot
+    newTag: latest
+
+configMapGenerator:
+  - name: housepot-config
+    literals:
+      - BASE_URL=https://housepot.example.com
+      - SMS_PROVIDER=twilio
+      - PAYMENTS_PROVIDER=stripe
+      - STORAGE_PROVIDER=s3
+      - S3_REGION=us-east-1
+      - S3_BUCKET=housepot
+
+secretGenerator:
+  - name: housepot-secrets
+    envs:
+      - secret.env

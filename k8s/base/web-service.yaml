@@ -1,0 +1,16 @@
+# Service: one stable name ("web") and address inside the cluster that spreads requests across
+# whichever web pods are ready right now.
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  labels:
+    app.kubernetes.io/component: web
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/component: web
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

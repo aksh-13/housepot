@@ -1,0 +1,30 @@
+# Ingress: the front door. Routes https://your-domain/ from the internet to the web Service.
+# Assumes the cluster runs the nginx ingress controller, and cert-manager for the TLS certificate.
+# Change both host names to your domain.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web
+  labels:
+    app.kubernetes.io/component: web
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
+    # Proof photos are uploaded through the app, so allow request bodies up to 10 MB.
+    nginx.ingress.kubernetes.io/proxy-body-size: 10m
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - housepot.example.com
+      secretName: housepot-tls
+  rules:
+    - host: housepot.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  name: http

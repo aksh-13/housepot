@@ -1,0 +1,13 @@
+# Settings for the local kind cluster (a Kubernetes cluster that runs inside Docker).
+# Not a Kubernetes object: scripts/kind-up.sh hands this file to `kind create cluster`.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: housepot
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      # localhost:8642 on the laptop -> port 30080 on the node -> the web-local Service.
+      - containerPort: 30080
+        hostPort: 8642
+        listenAddress: "127.0.0.1"
+        protocol: TCP

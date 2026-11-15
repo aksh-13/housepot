@@ -1,0 +1,18 @@
+# A second Service that opens port 30080 on the cluster's node. kind-config.yaml forwards
+# localhost:8642 on your laptop to it, which is how the browser reaches the app locally.
+# (Production uses an Ingress instead; see overlays/prod.)
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-local
+  labels:
+    app.kubernetes.io/component: web
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/component: web
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      nodePort: 30080

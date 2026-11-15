@@ -12,7 +12,9 @@
     "format": "biome check --write .",
     "typecheck": "tsc --noEmit",
     "db:up": "sh scripts/dev-db.sh",
-    "db:migrate": "node scripts/migrate.mjs"
+    "db:migrate": "node scripts/migrate.mjs",
+    "k8s:up": "sh scripts/kind-up.sh",
+    "k8s:down": "sh scripts/kind-down.sh"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1169.0",
@@ -32,5 +34,6 @@
     "@types/react-dom": "^19.3.0",
     "typescript": "^5.9.3",
     "vitest": "^3.2.7"
-  }
+  },
+  "packageManager": "pnpm@10.20.0"
 }

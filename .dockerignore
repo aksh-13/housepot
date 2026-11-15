@@ -1,0 +1,14 @@
+node_modules
+.next
+.git
+.github
+.env
+.env.local
+.data
+.bin
+.kube
+.superpowers
+docs
+test
+k8s
+*.md

@@ -52,7 +52,21 @@ if (isMain) {
     process.exit(1);
   }
   const dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../migrations");
-  migrate(url, dir)
+  // In a fresh cluster the database may still be starting. Keep trying for a minute before giving up.
+  const deadline = Date.now() + Number(process.env.MIGRATE_WAIT_SECONDS ?? 60) * 1000;
+  const run = async () => {
+    for (;;) {
+      try {
+        return await migrate(url, dir);
+      } catch (err) {
+        const unreachable = ["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "57P03"].includes(err.code);
+        if (!unreachable || Date.now() > deadline) throw err;
+        console.log("Database not ready yet, retrying in 2s…");
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+    }
+  };
+  run()
     .then((applied) => {
       console.log(applied.length ? `Applied: ${applied.join(", ")}` : "Database is up to date");
     })

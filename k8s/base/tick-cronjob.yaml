@@ -1,0 +1,62 @@
+# CronJob: every five minutes, start a short-lived pod that pokes the app's tick endpoint.
+# The tick hands out turns, sends reminders, charges missed chores and settles houses at term end.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: tick
+  labels:
+    app.kubernetes.io/component: tick
+spec:
+  schedule: "*/5 * * * *"
+  # If a tick is still running when the next is due, skip the new one.
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 120
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/component: tick
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 100
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: tick
+              image: curlimages/curl:8.11.1
+              # $(TICK_SECRET) is filled in by Kubernetes from the env entry below.
+              args:
+                - "--fail"
+                - "--silent"
+                - "--show-error"
+                - "--max-time"
+                - "90"
+                - "-X"
+                - "POST"
+                - "-H"
+                - "Authorization: Bearer $(TICK_SECRET)"
+                - "http://web/api/internal/tick"
+              env:
+                - name: TICK_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: housepot-secrets
+                      key: TICK_SECRET
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 16Mi
+                limits:
+                  cpu: 100m
+                  memory: 32Mi
