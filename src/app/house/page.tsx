@@ -45,7 +45,7 @@ function describe(item: ActivityItem, meId: string): { text: string; cents?: num
     case "claimed":
       return { text: `${who} did ${chore} and took the bounty`, cents: payout || undefined };
     case "skipped":
-      return { text: `${who} paid to skip ${chore}`, cents: -amount };
+      return { text: `${who} skipped ${chore}`, cents: -amount };
     case "missed":
       return { text: `${who} missed ${chore}`, cents: -amount };
     case "dispute_raised":
@@ -88,8 +88,7 @@ const midSentence = (label: string) =>
 
 function openReason(turn: TurnView, meId: string): string {
   const mine = turn.assigneeMemberId === meId;
-  if (turn.openedReason === "skip")
-    return mine ? "You paid to skip this." : `${turn.assigneeName} paid to skip.`;
+  if (turn.openedReason === "skip") return mine ? "You skipped this." : `${turn.assigneeName} skipped it.`;
   if (turn.openedReason === "dispute") return "The house said it was not done.";
   return mine ? "You missed this." : `${turn.assigneeName} missed it.`;
 }

@@ -25,7 +25,9 @@ function Status({ d, now, tz }: { d: DebtView; now: Date; tz: string }) {
   if (d.dueAt.getTime() < now.getTime()) return <span className="status status-overdue">Overdue</span>;
   if (d.status === "sent") return <span className="status">Sent · waiting for it to land</span>;
   return (
-    <span className="status">Due {dueLabel(d.dueAt, now, tz).replace(/^\w/, (c) => c.toLowerCase())}</span>
+    <span className="status">
+      Due {dueLabel(d.dueAt, now, tz).replace(/^(Today|Tomorrow|Yesterday)/, (w) => w.toLowerCase())}
+    </span>
   );
 }
 
