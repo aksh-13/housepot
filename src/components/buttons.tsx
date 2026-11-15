@@ -1,0 +1,127 @@
+"use client";
+
+import { type ReactNode, useState } from "react";
+import { useFormStatus } from "react-dom";
+
+type SubmitProps = { children: ReactNode; className?: string; pendingLabel?: string };
+
+/** A submit button that greys out and changes its label while its form is being sent. */
+export function SubmitButton({ children, className = "btn", pendingLabel = "Working…" }: SubmitProps) {
+  const { pending } = useFormStatus();
+  return (
+    <button type="submit" className={className} disabled={pending}>
+      {pending ? pendingLabel : children}
+    </button>
+  );
+}
+
+const MAX_EDGE = 1600;
+
+/** Shrinks a phone photo to a sensible size before upload. Falls back to the original on any problem. */
+async function shrink(file: File): Promise<File> {
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, MAX_EDGE / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    canvas.getContext("2d")?.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.82));
+    return blob ? new File([blob], "proof.jpg", { type: "image/jpeg" }) : file;
+  } catch {
+    return file;
+  }
+}
+
+function CameraIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <path d="M4 8.5h3l1.6-2.5h6.8L17 8.5h3a1 1 0 0 1 1 1V18a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9.5a1 1 0 0 1 1-1Z" />
+      <circle cx="12" cy="13.5" r="3.4" />
+    </svg>
+  );
+}
+
+/**
+ * A button that opens the camera. Choosing a photo sends the surrounding form straight away,
+ * so "done" is one tap and one photo.
+ */
+export function PhotoSubmit({ label, className = "btn btn-primary" }: { label: string; className?: string }) {
+  const { pending } = useFormStatus();
+  const [preparing, setPreparing] = useState(false);
+  const busy = pending || preparing;
+  return (
+    <label className={className} aria-disabled={busy}>
+      <CameraIcon />
+      {busy ? "Uploading…" : label}
+      <input
+        type="file"
+        name="photo"
+        accept="image/*"
+        capture="environment"
+        className="visually-hidden"
+        onChange={async (e) => {
+          const input = e.currentTarget;
+          const file = input.files?.[0];
+          if (!file) return;
+          setPreparing(true);
+          try {
+            const small = await shrink(file);
+            if (small !== file) {
+              const swap = new DataTransfer();
+              swap.items.add(small);
+              input.files = swap.files;
+            }
+          } catch {
+            // Keep the original file.
+          }
+          input.form?.requestSubmit();
+          setPreparing(false);
+        }}
+      />
+    </label>
+  );
+}
+
+/** Copies the invite link, or opens the phone's share sheet when there is one. */
+export function ShareLink({ url, houseName }: { url: string; houseName: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className="btn"
+      onClick={async () => {
+        try {
+          if (navigator.share) {
+            await navigator.share({ title: `Join ${houseName} on Housepot`, url });
+            return;
+          }
+          await navigator.clipboard.writeText(url);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+        } catch {
+          // The person closed the share sheet, or the clipboard is blocked. Nothing to do.
+        }
+      }}
+    >
+      {copied ? "Copied" : "Share"}
+    </button>
+  );
+}
+
+/** Shows only the schedule fields that match the chosen repeat (weekly, or every N days). */
+export function ScheduleFields({ children, initial }: { children: ReactNode; initial: string }) {
+  const [kind, setKind] = useState(initial);
+  return (
+    <div
+      className="schedule"
+      data-kind={kind}
+      onChange={(e) => {
+        const target = e.target as unknown as HTMLSelectElement;
+        if (target.name === "scheduleKind") setKind(target.value);
+      }}
+    >
+      {children}
+    </div>
+  );
+}
