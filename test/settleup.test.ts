@@ -1,0 +1,324 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { beforeEach, describe, expect, test } from "vitest";
+import { createChore, ensureTurns } from "@/domain/chores";
+import { getHouse, joinHouse } from "@/domain/houses";
+import { choreBounty, memberBalance } from "@/domain/ledger";
+import { savePhoto } from "@/domain/photos";
+import { leaveHouse, voteClosePot } from "@/domain/settlement";
+import {
+  debtsForUser,
+  markDebtPaid,
+  markDebtSent,
+  minimalPayments,
+  newDebtCode,
+  PAY_WITHIN_MS,
+  settleUpHouse,
+} from "@/domain/settleup";
+import { runTick } from "@/domain/tick";
+import { claimBounty, missTurn, payToSkip } from "@/domain/turns";
+import { fakePayments } from "@/providers/payments";
+import { fakeSms } from "@/providers/sms";
+import { diskStorage } from "@/providers/storage";
+import { db, makeHouse, makeUser, resetDb, type TestHouse } from "./helpers";
+
+const NOW = new Date("2026-11-11T17:00:00Z"); // Wed noon Toronto; garbage is due Thu 21:00
+const LATE = new Date("2026-11-13T02:00:01Z"); // one second past the deadline
+const DEC_1 = new Date("2026-12-01T14:00:00Z"); // 9am Toronto on the 1st
+const HOUR = 60 * 60_000;
+const plus = (d: Date, ms: number) => new Date(d.getTime() + ms);
+const storage = diskStorage(mkdtempSync(path.join(tmpdir(), "housepot-settle-")));
+const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4]);
+const sms = fakeSms(db);
+const payments = fakePayments();
+
+let house: TestHouse;
+let a: string;
+let b: string;
+let c: string;
+
+beforeEach(async () => {
+  await resetDb();
+  house = await makeHouse(3, { moneyMode: "etransfer" });
+  [a, b, c] = house.members.map((m) => m.memberId);
+  const chore = await createChore(db, {
+    houseId: house.houseId,
+    memberId: a,
+    name: "Garbage",
+    schedule: { kind: "weekly", weekday: 4 },
+    deadlineTime: "21:00",
+    now: NOW,
+  });
+  if (!chore.ok) throw new Error(chore.error);
+  await ensureTurns(db, house.houseId, NOW);
+});
+
+async function photo(memberId: string): Promise<string> {
+  const r = await savePhoto(db, storage, {
+    houseId: house.houseId,
+    memberId,
+    bytes: JPEG,
+    contentType: "image/jpeg",
+    now: NOW,
+  });
+  if (!r.ok) throw new Error(r.error);
+  return r.photoId;
+}
+
+const waitingTurn = async () =>
+  (await db.query("select id, assignee_member_id from turns where status = 'assigned'")).rows[0];
+const openTurn = async () => (await db.query("select id from turns where status = 'open'")).rows[0];
+const balances = async () => Promise.all([a, b, c].map((m) => memberBalance(db, m)));
+const ledgerTotal = async () =>
+  (await db.query("select coalesce(sum(amount_cents), 0)::int as t from ledger_entries")).rows[0].t;
+const debts = async () =>
+  (
+    await db.query(
+      "select from_member_id, to_member_id, amount_cents, status from debts order by amount_cents desc, to_member_id",
+    )
+  ).rows;
+const texts = async () => (await db.query("select to_phone, body from sms_outbox order by id")).rows;
+
+/** A skips the garbage (the first turn is always theirs) and B claims it. */
+async function aSkipsBClaims(): Promise<void> {
+  const turn = await waitingTurn();
+  expect(turn.assignee_member_id).toBe(a);
+  expect(await payToSkip(db, { turnId: turn.id, memberId: a, now: NOW })).toEqual({ ok: true });
+  expect(await claimBounty(db, { turnId: turn.id, memberId: b, photoId: await photo(b), now: NOW })).toEqual({
+    ok: true,
+    payoutCents: 500,
+  });
+}
+
+describe("minimalPayments", () => {
+  test("two losers and one winner need two payments", () => {
+    expect(
+      minimalPayments([
+        { memberId: "a", cents: -500 },
+        { memberId: "b", cents: -300 },
+        { memberId: "c", cents: 800 },
+      ]),
+    ).toEqual([
+      { fromMemberId: "a", toMemberId: "c", amountCents: 500 },
+      { fromMemberId: "b", toMemberId: "c", amountCents: 300 },
+    ]);
+  });
+
+  test("everyone at zero needs no payments", () => {
+    expect(
+      minimalPayments([
+        { memberId: "a", cents: 0 },
+        { memberId: "b", cents: 0 },
+      ]),
+    ).toEqual([]);
+  });
+
+  test("random houses always balance out in at most n - 1 payments", () => {
+    for (let round = 0; round < 200; round++) {
+      const n = 2 + (round % 7);
+      const cents = Array.from({ length: n - 1 }, () => Math.floor(Math.random() * 4001) - 2000);
+      cents.push(-cents.reduce((s, x) => s + x, 0));
+      const balances = cents.map((x, i) => ({ memberId: `m${i}`, cents: x }));
+      const pays = minimalPayments(balances);
+      expect(pays.length).toBeLessThanOrEqual(n - 1);
+      const after = new Map(balances.map((x) => [x.memberId, x.cents]));
+      for (const p of pays) {
+        expect(p.amountCents).toBeGreaterThan(0);
+        after.set(p.fromMemberId, after.get(p.fromMemberId)! + p.amountCents);
+        after.set(p.toMemberId, after.get(p.toMemberId)! - p.amountCents);
+      }
+      expect([...after.values()].every((x) => x === 0)).toBe(true);
+    }
+  });
+});
+
+test("debt codes look like HP-XXXX with no look-alike characters", () => {
+  for (let i = 0; i < 100; i++) expect(newDebtCode()).toMatch(/^HP-[A-HJ-NP-Z2-9]{4}$/);
+});
+
+test("everyone in an e-Transfer house is active from the start, at $0, with no deposit", async () => {
+  const { rows } = await db.query("select status from members where house_id = $1", [house.houseId]);
+  expect(rows.map((r) => r.status)).toEqual(["active", "active", "active"]);
+  expect(await balances()).toEqual([0, 0, 0]);
+  expect((await getHouse(db, house.houseId))?.settlementDate).toBe("2026-12-01");
+});
+
+test("skipping at $0 is allowed and takes the balance below zero", async () => {
+  const turn = await waitingTurn();
+  expect(await payToSkip(db, { turnId: turn.id, memberId: a, now: NOW })).toEqual({ ok: true });
+  expect(await memberBalance(db, a)).toBe(-500);
+});
+
+test("a settle-up turns the scoreboard into one debt and brings everyone back to zero", async () => {
+  await aSkipsBClaims();
+  expect(await balances()).toEqual([-500, 500, 0]);
+
+  const created = await settleUpHouse(db, { houseId: house.houseId, now: DEC_1, reason: "scheduled" });
+  expect(created).toHaveLength(1);
+  expect(await debts()).toEqual([{ from_member_id: a, to_member_id: b, amount_cents: 500, status: "owed" }]);
+  expect(await balances()).toEqual([0, 0, 0]);
+  expect(await ledgerTotal()).toBe(0);
+  expect((await getHouse(db, house.houseId))?.settlementDate).toBe("2027-01-01");
+});
+
+test("an unclaimed bounty is shared out first, so the person who skipped pays everyone", async () => {
+  const turn = await waitingTurn();
+  await missTurn(db, { turnId: turn.id, now: LATE });
+  const created = await settleUpHouse(db, { houseId: house.houseId, now: DEC_1, reason: "scheduled" });
+  // $5 shared three ways is 167 + 167 + 166. A gets 167 back and owes the other two their shares.
+  expect(created).toHaveLength(2);
+  expect(await debts()).toEqual([
+    { from_member_id: a, to_member_id: b, amount_cents: 167, status: "owed" },
+    { from_member_id: a, to_member_id: c, amount_cents: 166, status: "owed" },
+  ]);
+  expect(await balances()).toEqual([0, 0, 0]);
+  expect(await openTurn()).toBeUndefined();
+  const choreId = (await db.query("select id from chores")).rows[0].id;
+  expect(await choreBounty(db, choreId)).toBe(0);
+});
+
+test("a house where nobody won or lost creates no debts", async () => {
+  expect(await settleUpHouse(db, { houseId: house.houseId, now: DEC_1, reason: "scheduled" })).toEqual([]);
+  expect(await debts()).toEqual([]);
+});
+
+test("only the payer can say they sent it, and only the receiver can confirm it arrived", async () => {
+  await aSkipsBClaims();
+  const [debt] = await settleUpHouse(db, { houseId: house.houseId, now: DEC_1, reason: "scheduled" });
+  const [ua, ub] = [house.members[0].userId, house.members[1].userId];
+
+  expect((await markDebtSent(db, { debtId: debt.id, userId: ub, now: DEC_1 })).ok).toBe(false);
+  expect((await markDebtSent(db, { debtId: debt.id, userId: ua, now: DEC_1 })).ok).toBe(true);
+  expect((await debts())[0].status).toBe("sent");
+
+  expect((await markDebtPaid(db, { debtId: debt.id, via: "manual", userId: ua, now: DEC_1 })).ok).toBe(false);
+  const paid = await markDebtPaid(db, { debtId: debt.id, via: "manual", userId: ub, now: DEC_1 });
+  expect(paid).toMatchObject({ ok: true, changed: true });
+  const again = await markDebtPaid(db, { debtId: debt.id, via: "manual", userId: ub, now: DEC_1 });
+  expect(again).toMatchObject({ ok: true, changed: false });
+  expect((await debts())[0].status).toBe("paid");
+  expect(await balances()).toEqual([0, 0, 0]);
+});
+
+test("both people see the debt, from their own side", async () => {
+  await aSkipsBClaims();
+  await settleUpHouse(db, { houseId: house.houseId, now: DEC_1, reason: "scheduled" });
+  const forA = await debtsForUser(db, house.members[0].userId);
+  const forB = await debtsForUser(db, house.members[1].userId);
+  const forC = await debtsForUser(db, house.members[2].userId);
+  expect(forA).toHaveLength(1);
+  expect(forB).toHaveLength(1);
+  expect(forC).toHaveLength(0);
+  expect(forA[0]).toMatchObject({ fromName: "Ana", toName: "Ben", amountCents: 500 });
+});
+
+test("an overdue debt stops you claiming bounties until it is paid", async () => {
+  await aSkipsBClaims();
+  const [debt] = await settleUpHouse(db, { houseId: house.houseId, now: DEC_1, reason: "scheduled" });
+  const afterDue = plus(DEC_1, PAY_WITHIN_MS + HOUR);
+  // B misses next, so there is something for A to claim.
+  await ensureTurns(db, house.houseId, afterDue);
+  const next = (await db.query("select id, due_at from turns where status = 'assigned'")).rows[0];
+  await missTurn(db, { turnId: next.id, now: plus(next.due_at, 1000) });
+  const claimAt = plus(next.due_at, 2000);
+
+  const refused = await claimBounty(db, {
+    turnId: next.id,
+    memberId: a,
+    photoId: await photo(a),
+    now: claimAt,
+  });
+  expect(refused).toEqual({
+    ok: false,
+    error: "You have a settle-up payment that is overdue. Pay it first, then you can claim.",
+  });
+  await markDebtPaid(db, { debtId: debt.id, via: "manual", userId: house.members[1].userId, now: claimAt });
+  const allowed = await claimBounty(db, {
+    turnId: next.id,
+    memberId: a,
+    photoId: await photo(a),
+    now: claimAt,
+  });
+  expect(allowed.ok).toBe(true);
+});
+
+test("the tick settles up on the 1st once, texts both sides, and does not stop the house", async () => {
+  await aSkipsBClaims();
+  await db.query("delete from sms_outbox");
+  const first = await runTick(db, { sms, payments }, DEC_1, "https://housepot.test");
+  expect(first).toMatchObject({ settled: 1, debtsCreated: 1 });
+  const second = await runTick(db, { sms, payments }, plus(DEC_1, 5 * 60_000), "https://housepot.test");
+  expect(second).toMatchObject({ settled: 0, debtsCreated: 0 });
+  expect(await debts()).toHaveLength(1);
+
+  const sent = await texts();
+  const toA = sent.filter((t) => t.to_phone === house.members[0].phone).map((t) => t.body);
+  const toB = sent.filter((t) => t.to_phone === house.members[1].phone).map((t) => t.body);
+  expect(
+    toA.some((body) => /you owe Ben \$5\. .*HP-[A-Z0-9]{4}.*https:\/\/housepot\.test\/settle/.test(body)),
+  ).toBe(true);
+  expect(toB.some((body) => body.includes("Ana owes you $5"))).toBe(true);
+  // Members stay active: nobody has to pay back in, unlike a card house.
+  const { rows } = await db.query("select status from members where house_id = $1", [house.houseId]);
+  expect(rows.every((r) => r.status === "active")).toBe(true);
+});
+
+test("an unpaid debt gets one reminder after a day and one when it is overdue, never more", async () => {
+  await aSkipsBClaims();
+  await settleUpHouse(db, { houseId: house.houseId, now: DEC_1, reason: "scheduled" });
+  await db.query("delete from sms_outbox");
+  const reminders = async () =>
+    (await texts()).filter((t) => t.to_phone === house.members[0].phone && /owe|overdue/.test(t.body));
+
+  const t = (ms: number) => runTick(db, { sms, payments }, plus(DEC_1, ms), "https://housepot.test");
+  await t(HOUR);
+  expect(await reminders()).toHaveLength(0);
+  await t(25 * HOUR);
+  await t(26 * HOUR);
+  expect(await reminders()).toHaveLength(1);
+  await t(PAY_WITHIN_MS + HOUR);
+  await t(PAY_WITHIN_MS + 2 * HOUR);
+  const all = await reminders();
+  expect(all).toHaveLength(2);
+  expect(all[1].body).toContain("overdue");
+});
+
+test("a debt marked as sent is not chased", async () => {
+  await aSkipsBClaims();
+  const [debt] = await settleUpHouse(db, { houseId: house.houseId, now: DEC_1, reason: "scheduled" });
+  await markDebtSent(db, { debtId: debt.id, userId: house.members[0].userId, now: DEC_1 });
+  await db.query("delete from sms_outbox");
+  await runTick(db, { sms, payments }, plus(DEC_1, 30 * HOUR), "https://housepot.test");
+  expect((await texts()).filter((x) => x.to_phone === house.members[0].phone)).toEqual([]);
+});
+
+test("leaving settles the house up, so the leaver's winnings become a debt owed to them", async () => {
+  await aSkipsBClaims();
+  const left = await leaveHouse(db, payments, { memberId: b, now: plus(NOW, 25 * HOUR) });
+  expect(left).toMatchObject({ ok: true });
+  expect(left.ok && left.debts).toHaveLength(1);
+  expect(await debts()).toEqual([{ from_member_id: a, to_member_id: b, amount_cents: 500, status: "owed" }]);
+  const { rows } = await db.query("select status from members where id = $1", [b]);
+  expect(rows[0].status).toBe("left");
+  // The debt outlives the membership: B still sees it.
+  expect(await debtsForUser(db, house.members[1].userId)).toHaveLength(1);
+  expect(payments.refunds).toEqual([]);
+});
+
+test("a majority vote settles up early", async () => {
+  await aSkipsBClaims();
+  expect(await voteClosePot(db, payments, { memberId: a, now: NOW })).toMatchObject({ closed: false });
+  const result = await voteClosePot(db, payments, { memberId: c, now: NOW });
+  expect(result).toMatchObject({ closed: true });
+  expect(result.debts).toHaveLength(1);
+  expect(await balances()).toEqual([0, 0, 0]);
+});
+
+test("someone who joins an e-Transfer house later is active straight away", async () => {
+  const userId = await makeUser("Late");
+  const joined = await joinHouse(db, { userId, inviteCode: house.inviteCode, now: NOW });
+  expect(joined.ok).toBe(true);
+  const { rows } = await db.query("select status from members where user_id = $1", [userId]);
+  expect(rows[0].status).toBe("active");
+});

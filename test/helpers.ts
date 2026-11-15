@@ -46,10 +46,12 @@ const NAMES = ["Ana", "Ben", "Cy", "Dee", "Eli", "Fay", "Gus", "Hal"];
  */
 export async function makeHouse(
   count: number,
-  opts: { active?: number; now?: Date } = {},
+  opts: { active?: number; now?: Date; moneyMode?: "card" | "etransfer" } = {},
 ): Promise<TestHouse> {
   const now = opts.now ?? new Date("2026-11-01T15:00:00Z");
-  const active = opts.active ?? count;
+  const moneyMode = opts.moneyMode ?? "card";
+  // Nobody pays a deposit in an e-Transfer house: everyone is active from the moment they join.
+  const active = moneyMode === "etransfer" ? 0 : (opts.active ?? count);
   const members: TestMember[] = [];
   let houseId = "";
   let inviteCode = "";
@@ -58,7 +60,7 @@ export async function makeHouse(
     const userId = await makeUser(name);
     let memberId: string;
     if (i === 0) {
-      const h = await createHouse(db, { userId, houseName: "Test House", now });
+      const h = await createHouse(db, { userId, houseName: "Test House", moneyMode, now });
       if (!h.ok) throw new Error(h.error);
       ({ houseId, inviteCode, memberId } = h);
     } else {
