@@ -49,8 +49,19 @@ export default async function JoinPage({ params, searchParams }: Props) {
           {house.name}
         </h1>
         <p className="muted small" style={{ margin: "var(--space-2) 0 var(--space-5)" }}>
-          With {mates.join(", ")}. Each housemate pays in {formatCents(house.depositCents)} (plus a{" "}
-          {formatCents(feeCents(house.depositCents))} card fee). You get back what is left at the end of term.
+          With {mates.join(", ")}.{" "}
+          {house.moneyMode === "etransfer" ? (
+            <>
+              Nobody pays in. Skip a chore and it costs you; do someone else's and you earn it. Once a month
+              the house settles up by e-Transfer.
+            </>
+          ) : (
+            <>
+              Each housemate pays in {formatCents(house.depositCents)} (plus a{" "}
+              {formatCents(feeCents(house.depositCents))} card fee). You get back what is left at the end of
+              term.
+            </>
+          )}
         </p>
 
         {!user ? (

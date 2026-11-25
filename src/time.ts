@@ -53,6 +53,11 @@ export function nextDueAt(schedule: Schedule, deadlineTime: string, tz: string, 
   return candidate.toJSDate();
 }
 
+/** The first day of next month in the given time zone, as "YYYY-MM-DD". */
+export function nextMonthStart(now: Date, tz: string): string {
+  return DateTime.fromJSDate(now, { zone: tz }).startOf("month").plus({ months: 1 }).toISODate()!;
+}
+
 /** Today's date in the given time zone, as "YYYY-MM-DD". */
 export function localDate(now: Date, tz: string): string {
   return DateTime.fromJSDate(now, { zone: tz }).toISODate()!;
