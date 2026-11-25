@@ -225,6 +225,14 @@ The app never holds money in this setup, so it needs no payment account. It has 
 6. **The tick.** Something must send `POST /api/internal/tick` with `Authorization: Bearer $TICK_SECRET` every five minutes. Without it no turns are handed out, no reminders go out and no settle-up happens. The Kubernetes manifests include a CronJob for it.
 7. **On Kubernetes:** any cluster with the nginx ingress controller and cert-manager. Put your domain in `k8s/overlays/prod/ingress.yaml` and `kustomization.yaml`, fill in `secret.env`, then `kubectl apply -k k8s/overlays/prod`. If the image on ghcr.io is private, create a pull secret named `ghcr-pull` in the `housepot` namespace (`kubectl create secret docker-registry ghcr-pull --docker-server=ghcr.io --docker-username=aksh-13 --docker-password=<a token with read:packages>`), or make the package public and delete that patch from the overlay.
 
+### On Vercel
+
+`vercel.json` runs the migrations before each build. They take a session lock, so they use `DATABASE_URL_UNPOOLED` (a direct connection, which the Neon integration provides) when it is set, and `DATABASE_URL` otherwise. The app itself should use a pooled `DATABASE_URL`.
+
+- Photos need `STORAGE_PROVIDER=s3`; there is no disk to save to.
+- Vercel's own cron cannot call the tick on the Hobby plan (once a day at most, and it sends GET). Use an outside scheduler to send the POST every five minutes.
+- A request is capped at 4.5 MB, so a proof photo that could not be shrunk in the browser is rejected.
+
 ### Later
 
 - **Card houses.** First check the rules on holding money: confirm Stripe's terms allow holding deposits this way and check Canadian rules for holding funds on behalf of users. This is an open question, not a solved one. Then create a Stripe account, set `PAYMENTS_PROVIDER=stripe` and the two keys, add a webhook at `https://YOUR-DOMAIN/api/webhooks/payments` for `checkout.session.completed`, and set `CARD_HOUSES=on`. The Stripe code path has not been run against a real Stripe account.
