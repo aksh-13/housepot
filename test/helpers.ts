@@ -24,13 +24,14 @@ export async function resetDb(): Promise<void> {
   }
 }
 
-/** A signed-up person with a unique phone number. Returns the user id. */
-export async function makeUser(name: string): Promise<string> {
+/** A signed-up person with a unique phone number, and an email if one is given. Returns the user id. */
+export async function makeUser(name: string, opts: { email?: string } = {}): Promise<string> {
   phoneCounter += 1;
   const phone = `+1905555${String(phoneCounter).padStart(4, "0")}`;
-  const { rows } = await db.query("insert into users (phone, name) values ($1, $2) returning id", [
+  const { rows } = await db.query("insert into users (phone, name, email) values ($1, $2, $3) returning id", [
     phone,
     name,
+    opts.email ?? null,
   ]);
   return rows[0].id;
 }

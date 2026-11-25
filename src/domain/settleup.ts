@@ -2,6 +2,7 @@ import { randomInt } from "node:crypto";
 import type { Db } from "@/db";
 import { formatCents } from "@/money";
 import type { Sms } from "@/providers/sms";
+import { inboundMode } from "@/settings";
 import { nextMonthStart } from "@/time";
 import { logActivity } from "./activity";
 import { activeMembers, getHouse } from "./houses";
@@ -44,6 +45,44 @@ export function minimalPayments(balances: { memberId: string; cents: number }[])
     if (creditors[c].cents === 0) c += 1;
   }
   return payments;
+}
+
+export type SquareUpLine = Payment & { fromName: string; toName: string };
+
+/**
+ * The fewest payments that would square the house up right now, for showing on the home screen.
+ * It creates nothing and moves nothing: real debts are only made by a settle-up.
+ *
+ * Money waiting on a chore nobody has claimed belongs to no one yet, so it is reported separately
+ * and the payments can add up to a little less than what people are down.
+ */
+export async function houseSquareUp(
+  db: Db,
+  houseId: string,
+): Promise<{ lines: SquareUpLine[]; unclaimedCents: number }> {
+  const [balances, unclaimed] = await Promise.all([
+    db.query<{ memberId: string; name: string; cents: number }>(
+      `select m.id as "memberId", coalesce(u.name, 'Housemate') as name,
+              coalesce(sum(le.amount_cents), 0)::int as cents
+       from members m join users u on u.id = m.user_id
+       left join ledger_entries le on le.member_id = m.id
+       where m.house_id = $1 and m.status <> 'left'
+       group by m.id, u.name`,
+      [houseId],
+    ),
+    db.query<{ cents: number }>(
+      `select coalesce(sum(amount_cents), 0)::int as cents from ledger_entries
+       where house_id = $1 and chore_id is not null`,
+      [houseId],
+    ),
+  ]);
+  const name = new Map(balances.rows.map((b) => [b.memberId, b.name]));
+  const lines = minimalPayments(balances.rows).map((p) => ({
+    ...p,
+    fromName: name.get(p.fromMemberId) ?? "Housemate",
+    toName: name.get(p.toMemberId) ?? "Housemate",
+  }));
+  return { lines, unclaimedCents: unclaimed.rows[0].cents };
 }
 
 const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
@@ -141,6 +180,11 @@ export async function settleUpHouse(
     }
 
     await t.query("delete from close_votes where house_id = $1", [a.houseId]);
+    // Every bill so far is part of these debts now, so it can no longer be edited or deleted.
+    await t.query(
+      "update bills set settled_at = $2 where house_id = $1 and settled_at is null and deleted_at is null",
+      [a.houseId, a.now],
+    );
     await t.query("update houses set settlement_date = $2 where id = $1", [
       a.houseId,
       nextMonthStart(a.now, house.tz),
@@ -185,12 +229,12 @@ export type DebtView = {
   fromName: string;
   fromEmail: string | null;
   fromBank: string | null;
-  fromPhone: string;
+  fromContact: string;
   fromUserId: string;
   toMemberId: string;
   toName: string;
   toEmail: string | null;
-  toPhone: string;
+  toContact: string;
   toUserId: string;
 };
 
@@ -198,9 +242,9 @@ const DEBT_SELECT = `select d.id, d.house_id as "houseId", h.name as "houseName"
     d.code, d.status, d.paid_via as "paidVia", d.request_url as "requestUrl", d.due_at as "dueAt",
     d.created_at as "createdAt", d.paid_at as "paidAt",
     d.from_member_id as "fromMemberId", coalesce(fu.name, 'Housemate') as "fromName",
-    fm.etransfer_email as "fromEmail", fm.bank as "fromBank", fu.phone as "fromPhone", fu.id as "fromUserId",
+    fm.etransfer_email as "fromEmail", fm.bank as "fromBank", coalesce(fu.email, fu.phone) as "fromContact", fu.id as "fromUserId",
     d.to_member_id as "toMemberId", coalesce(tu.name, 'Housemate') as "toName",
-    tm.etransfer_email as "toEmail", tu.phone as "toPhone", tu.id as "toUserId"
+    tm.etransfer_email as "toEmail", coalesce(tu.email, tu.phone) as "toContact", tu.id as "toUserId"
   from debts d
   join houses h on h.id = d.house_id
   join members fm on fm.id = d.from_member_id join users fu on fu.id = fm.user_id
@@ -314,22 +358,36 @@ export async function textNewDebts(db: Db, sms: Sms, debts: CreatedDebt[], link:
     const amount = formatCents(d.amountCents);
     await send(
       sms,
-      d.fromPhone,
+      d.fromContact,
       `Housepot settle-up: you owe ${d.toName} ${amount}. Pay by e-Transfer and put ${d.code} in the message: ${link}`,
     );
     await send(
       sms,
-      d.toPhone,
-      d.toEmail
-        ? `Housepot settle-up: ${d.fromName} owes you ${amount}. Send them an Interac request to make it one tap: ${link}`
-        : `Housepot settle-up: ${d.fromName} owes you ${amount}. Add your e-Transfer email so they can pay you: ${link}`,
+      d.toContact,
+      inboundMode() === "off"
+        ? `Housepot settle-up: ${d.fromName} owes you ${amount}. ${link}`
+        : d.toEmail
+          ? `Housepot settle-up: ${d.fromName} owes you ${amount}. Send them an Interac request to make it one tap: ${link}`
+          : `Housepot settle-up: ${d.fromName} owes you ${amount}. Add your e-Transfer email so they can pay you: ${link}`,
     );
   }
+}
+
+/** Tells the person owed that the payer says the money is on its way. */
+export async function textDebtSent(sms: Sms, d: DebtView, link: string): Promise<void> {
+  const said = `${d.fromName} says they sent you ${formatCents(d.amountCents)} by e-Transfer.`;
+  await send(
+    sms,
+    d.toContact,
+    inboundMode() === "off"
+      ? `${said} When it lands, tap It arrived: ${link}`
+      : `${said} It is marked paid as soon as Interac's email reaches Housepot, or tap Received: ${link}`,
+  );
 }
 
 /** Tells both sides a debt is cleared. */
 export async function textDebtPaid(sms: Sms, d: DebtView, link: string): Promise<void> {
   const amount = formatCents(d.amountCents);
-  await send(sms, d.fromPhone, `${d.toName} got your ${amount}. You are square. ${link}`);
-  await send(sms, d.toPhone, `${d.fromName}'s ${amount} arrived. Marked as paid. ${link}`);
+  await send(sms, d.fromContact, `${d.toName} got your ${amount}. You are square. ${link}`);
+  await send(sms, d.toContact, `${d.fromName}'s ${amount} arrived. Marked as paid. ${link}`);
 }

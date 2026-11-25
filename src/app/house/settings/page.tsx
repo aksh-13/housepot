@@ -16,6 +16,7 @@ import { closeVoteCount } from "@/domain/settlement";
 import { baseUrl, requireMember } from "@/lib/current";
 import { ago, dateLabel } from "@/lib/format";
 import { formatCents } from "@/money";
+import { inboundIsOff } from "@/providers";
 
 type Props = { searchParams: Promise<Record<string, string | string[] | undefined>> };
 
@@ -110,7 +111,7 @@ export default async function SettingsPage({ searchParams }: Props) {
         </section>
       )}
 
-      {etransfer && (
+      {etransfer && !inboundIsOff() && (
         <section className="section stack" id="auto-check">
           <h2 className="label">Auto-check payments</h2>
           <p className="small muted">
@@ -235,7 +236,7 @@ export default async function SettingsPage({ searchParams }: Props) {
         <div className="setting">
           <div>
             <h3>Signed in as {user.name ?? "you"}</h3>
-            <p>{user.phone}</p>
+            <p>{user.email ?? user.phone}</p>
           </div>
           <form action={signOutAction}>
             <SubmitButton>Sign out</SubmitButton>

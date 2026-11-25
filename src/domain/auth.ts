@@ -9,10 +9,12 @@ const SEND_WINDOW_MS = 60 * 60_000;
 const MAX_SENDS_PER_WINDOW = 5;
 const SESSION_LIFETIME_MS = 30 * 24 * 60 * 60_000;
 
-export type User = { id: string; phone: string; name: string | null };
+/** A person signs in with a phone number or an email, so one of the two is always set. */
+export type User = { id: string; phone: string | null; email: string | null; name: string | null };
 
 const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
-const hashCode = (phone: string, code: string) => sha256(`${phone}:${code}`);
+const hashCode = (address: string, code: string) => sha256(`${address}:${code}`);
+const isEmail = (address: string) => address.includes("@");
 
 /** Returns the number in +15551234567 form, or null if it is not a phone number. Ten digits are taken as +1. */
 export function normalizePhone(input: string): string | null {
@@ -24,24 +26,29 @@ export function normalizePhone(input: string): string | null {
   return null;
 }
 
-/** Texts a six-digit sign-in code. Refuses to send another within 30 seconds. */
+/**
+ * Sends a six-digit sign-in code to a phone number (+15551234567) or an email address, already
+ * normalized by the caller. Refuses to send another within 30 seconds.
+ */
 export async function requestCode(
   db: Db,
   sms: Sms,
-  phone: string,
+  address: string,
   now: Date,
 ): Promise<{ ok: boolean; error?: string }> {
   // Every text costs money, so codes only go to the countries the app serves, and each number
   // gets a handful per hour. Without this, anyone could make the app text arbitrary numbers.
-  const prefixes = (process.env.SMS_ALLOWED_PREFIXES ?? "+1").split(",").map((p) => p.trim());
-  if (!prefixes.some((p) => p && phone.startsWith(p))) {
-    return { ok: false, error: "Sign-in codes are only sent to Canadian and US numbers for now." };
+  if (!isEmail(address)) {
+    const prefixes = (process.env.SMS_ALLOWED_PREFIXES ?? "+1").split(",").map((p) => p.trim());
+    if (!prefixes.some((p) => p && address.startsWith(p))) {
+      return { ok: false, error: "Sign-in codes are only sent to Canadian and US numbers for now." };
+    }
   }
   const existing = await db.query<{
     last_sent_at: Date;
     window_started_at: Date | null;
     sends_in_window: number;
-  }>("select last_sent_at, window_started_at, sends_in_window from otp_codes where phone = $1", [phone]);
+  }>("select last_sent_at, window_started_at, sends_in_window from otp_codes where address = $1", [address]);
   const row = existing.rows[0];
   if (row && now.getTime() - row.last_sent_at.getTime() < RESEND_WAIT_MS) {
     return { ok: false, error: "Please wait 30 seconds before asking for another code." };
@@ -54,47 +61,55 @@ export async function requestCode(
   }
   const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
   await db.query(
-    `insert into otp_codes (phone, code_hash, expires_at, attempts, last_sent_at, window_started_at, sends_in_window)
+    `insert into otp_codes (address, code_hash, expires_at, attempts, last_sent_at, window_started_at, sends_in_window)
      values ($1, $2, $3, 0, $4, $5, $6)
-     on conflict (phone) do update set code_hash = excluded.code_hash, expires_at = excluded.expires_at,
+     on conflict (address) do update set code_hash = excluded.code_hash, expires_at = excluded.expires_at,
        attempts = 0, last_sent_at = excluded.last_sent_at,
        window_started_at = excluded.window_started_at, sends_in_window = excluded.sends_in_window`,
     [
-      phone,
-      hashCode(phone, code),
+      address,
+      hashCode(address, code),
       new Date(now.getTime() + CODE_LIFETIME_MS),
       now,
       windowOpen ? row?.window_started_at : now,
       sentThisHour + 1,
     ],
   );
-  await sms.send(phone, `Your Housepot code is ${code}. It works for 10 minutes.`);
+  try {
+    await sms.send(address, `Your Housepot code is ${code}. It works for 10 minutes.`);
+  } catch (err) {
+    // The person sees a message they can act on, not an error page. The detail goes to the logs.
+    console.error(`Sign-in code to ${address} failed:`, err instanceof Error ? err.message : err);
+    return { ok: false, error: "Could not send the code. Try again in a minute." };
+  }
   return { ok: true };
 }
 
 /** Checks a code. On success the code is used up, the user exists, and a 30-day session is returned. */
 export async function verifyCode(
   db: Db,
-  phone: string,
+  address: string,
   code: string,
   now: Date,
 ): Promise<{ userId: string; sessionToken: string } | null> {
   return db.tx(async (t) => {
     const { rows } = await t.query<{ code_hash: string; expires_at: Date; attempts: number }>(
-      "select code_hash, expires_at, attempts from otp_codes where phone = $1 for update",
-      [phone],
+      "select code_hash, expires_at, attempts from otp_codes where address = $1 for update",
+      [address],
     );
     const otp = rows[0];
     if (!otp || otp.expires_at.getTime() < now.getTime() || otp.attempts >= MAX_ATTEMPTS) return null;
-    if (otp.code_hash !== hashCode(phone, code.trim())) {
-      await t.query("update otp_codes set attempts = attempts + 1 where phone = $1", [phone]);
+    if (otp.code_hash !== hashCode(address, code.trim())) {
+      await t.query("update otp_codes set attempts = attempts + 1 where address = $1", [address]);
       return null;
     }
-    await t.query("delete from otp_codes where phone = $1", [phone]);
+    await t.query("delete from otp_codes where address = $1", [address]);
+    // The address is a fixed column name chosen here, never text from the request.
+    const column = isEmail(address) ? "email" : "phone";
     const user = await t.query<{ id: string }>(
-      `insert into users (phone, created_at) values ($1, $2)
-       on conflict (phone) do update set phone = excluded.phone returning id`,
-      [phone, now],
+      `insert into users (${column}, created_at) values ($1, $2)
+       on conflict (${column}) do update set ${column} = excluded.${column} returning id`,
+      [address, now],
     );
     const userId = user.rows[0].id;
     const sessionToken = randomBytes(32).toString("base64url");
@@ -109,7 +124,7 @@ export async function verifyCode(
 
 export async function sessionUser(db: Db, token: string, now: Date): Promise<User | null> {
   const { rows } = await db.query<User>(
-    `select u.id, u.phone, u.name from sessions s join users u on u.id = s.user_id
+    `select u.id, u.phone, u.email, u.name from sessions s join users u on u.id = s.user_id
      where s.token_hash = $1 and s.expires_at > $2`,
     [sha256(token), now],
   );

@@ -1,11 +1,14 @@
 import { getDb } from "@/db";
 import { applyPaymentEvent } from "@/domain/payments";
 import { getProviders } from "@/providers";
+import { cardHousesOn } from "@/settings";
 
 export const dynamic = "force-dynamic";
 
 /** The card processor calls this when a payment succeeds. The provider checks the signature. */
 export async function POST(req: Request): Promise<Response> {
+  // With card houses off nothing may credit a balance: the pretend provider accepts unsigned events.
+  if (!cardHousesOn()) return new Response("not found", { status: 404 });
   const rawBody = await req.text();
   const signature = req.headers.get("stripe-signature") ?? req.headers.get("x-fake-signature");
   const event = await getProviders().payments.parseWebhook(rawBody, signature);

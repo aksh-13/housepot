@@ -34,10 +34,14 @@ configMapGenerator:
   - name: housepot-config
     literals:
       - BASE_URL=https://housepot.example.com
-      - SMS_PROVIDER=twilio
-      - PAYMENTS_PROVIDER=stripe
-      - INBOUND_EMAIL_PROVIDER=webhook
-      - INBOUND_EMAIL_DOMAIN=pay.housepot.example
+      # People sign in with an emailed code, and reminders go by email.
+      - SIGN_IN=email
+      - EMAIL_PROVIDER=resend
+      # Card payments are not set up yet: e-Transfer houses only, and nothing can credit a balance.
+      - CARD_HOUSES=off
+      - PAYMENTS_PROVIDER=fake
+      # Interac emails are not read yet: housemates use "I sent it" and "It arrived".
+      - INBOUND_EMAIL_PROVIDER=off
       - STORAGE_PROVIDER=s3
       - S3_REGION=us-east-1
       - S3_BUCKET=housepot

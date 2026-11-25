@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { Db } from "@/db";
+import { cardHousesOn } from "@/settings";
 import { nextMonthStart, nextTermEnd } from "@/time";
 import { logActivity } from "./activity";
 import { transfer } from "./ledger";
@@ -30,7 +31,8 @@ export type Member = {
   /** Key from BANKS, for the "open my bank" button. */
   bank: string | null;
   name: string;
-  phone: string;
+  /** Where messages for this person go: their email if they have one, otherwise their phone. */
+  contact: string;
 };
 
 export type House = {
@@ -46,7 +48,7 @@ export type House = {
 
 const MEMBER_COLUMNS = `m.id, m.house_id as "houseId", m.user_id as "userId", m.status,
   m.rotation_position as "rotationPosition", m.auto_reload as "autoReload", m.customer_ref as "customerRef",
-  m.etransfer_email as "etransferEmail", m.bank, coalesce(u.name, 'Housemate') as name, u.phone`;
+  m.etransfer_email as "etransferEmail", m.bank, coalesce(u.name, 'Housemate') as name, coalesce(u.email, u.phone) as contact`;
 
 export const HOUSE_COLUMNS = `id, name, invite_code as "inviteCode", deposit_cents as "depositCents", tz, paused,
   settlement_date as "settlementDate", money_mode as "moneyMode"`;
@@ -102,10 +104,12 @@ async function addMember(
   now: Date,
 ): Promise<string> {
   const { rows } = await db.query<{ id: string }>(
-    `insert into members (house_id, user_id, rotation_position, joined_at, status)
-     values ($1, $2, (select coalesce(max(rotation_position) + 1, 0) from members where house_id = $1), $3, $4)
+    // In an e-Transfer house the sign-in email is where housemates send money, until they change it.
+    `insert into members (house_id, user_id, rotation_position, joined_at, status, etransfer_email)
+     values ($1, $2, (select coalesce(max(rotation_position) + 1, 0) from members where house_id = $1), $3, $4,
+       case when $5 then (select email from users where id = $2) end)
      returning id`,
-    [houseId, userId, now, moneyMode === "etransfer" ? "active" : "pending"],
+    [houseId, userId, now, moneyMode === "etransfer" ? "active" : "pending", moneyMode === "etransfer"],
   );
   return rows[0].id;
 }
@@ -135,6 +139,7 @@ export async function createHouse(
   const depositCents = a.depositCents ?? DEFAULT_DEPOSIT_CENTS;
   const moneyMode = a.moneyMode ?? "card";
   if (moneyMode !== "card" && moneyMode !== "etransfer") return { ok: false, error: "Pick how money works." };
+  if (moneyMode === "card" && !cardHousesOn()) return { ok: false, error: "Card houses are switched off." };
   if (!name) return { ok: false, error: "Give the house a name." };
   if (
     !Number.isInteger(depositCents) ||

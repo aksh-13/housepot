@@ -1,7 +1,7 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { beforeEach, expect, test } from "vitest";
+import { afterEach, beforeEach, expect, test } from "vitest";
 
 process.env.PHOTO_DIR = mkdtempSync(path.join(tmpdir(), "housepot-routes-"));
 process.env.TICK_SECRET = "test-tick-secret";
@@ -28,6 +28,9 @@ const NOW = new Date("2026-11-11T17:00:00Z");
 const LATE = new Date("2026-11-13T02:00:01Z");
 
 beforeEach(resetDb);
+afterEach(() => {
+  delete process.env.CARD_HOUSES;
+});
 
 /** Signs the user in for real and returns a Cookie header value. */
 async function cookieFor(userId: string): Promise<string> {
@@ -100,6 +103,30 @@ test("a genuine payment webhook credits the member and makes them active", async
   expect(res.status).toBe(200);
   expect(await memberBalance(db, h.memberId)).toBe(2000);
   expect((await activeMembers(db, h.houseId)).map((m) => m.id)).toEqual([h.memberId]);
+});
+
+test("the payments webhook answers 404 when card houses are off, and credits nothing", async () => {
+  const userId = await makeUser("Ana");
+  const h = await createHouse(db, { userId, houseName: "12 Elm", moneyMode: "etransfer", now: NOW });
+  if (!h.ok) throw new Error(h.error);
+  process.env.CARD_HOUSES = "off";
+  const body = JSON.stringify({
+    type: "payment_succeeded",
+    providerRef: "pay_off",
+    memberId: h.memberId,
+    amountCents: 2000,
+    feeCents: 91,
+    purpose: "deposit",
+  });
+  const res = await webhook(
+    new Request("http://x/api/webhooks/payments", {
+      method: "POST",
+      body,
+      headers: { "x-fake-signature": "fake" },
+    }),
+  );
+  expect(res.status).toBe(404);
+  expect(await memberBalance(db, h.memberId)).toBe(0);
 });
 
 test("a webhook without a valid signature is rejected and credits nothing", async () => {

@@ -1,7 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: "standalone",
-  serverExternalPackages: ["pg"],
+  serverExternalPackages: ["pg", "nodemailer"],
   experimental: { serverActions: { bodySizeLimit: "10mb" } },
 };
 

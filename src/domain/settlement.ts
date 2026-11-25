@@ -312,7 +312,7 @@ export type ManualPayoutView = {
   id: string;
   memberId: string;
   name: string;
-  phone: string;
+  contact: string;
   houseName: string;
   amountCents: number;
   createdAt: Date;
@@ -321,7 +321,7 @@ export type ManualPayoutView = {
 /** e-Transfers the operator still has to send. */
 export async function pendingManualPayouts(db: Db): Promise<ManualPayoutView[]> {
   const { rows } = await db.query<ManualPayoutView>(
-    `select p.id, p.member_id as "memberId", coalesce(u.name, 'Housemate') as name, u.phone,
+    `select p.id, p.member_id as "memberId", coalesce(u.name, 'Housemate') as name, coalesce(u.email, u.phone) as contact,
             h.name as "houseName", p.amount_cents as "amountCents", p.created_at as "createdAt"
      from manual_payouts p join members m on m.id = p.member_id join users u on u.id = m.user_id
      join houses h on h.id = p.house_id

@@ -3,6 +3,7 @@
 import { notFound, redirect } from "next/navigation";
 import { getDb } from "@/db";
 import { endSession, normalizePhone, requestCode, setUserName, verifyCode } from "@/domain/auth";
+import { billInputFromForm, createBill, deleteBill, editBill } from "@/domain/bills";
 import { createChore, ensureTurns, updateChore } from "@/domain/chores";
 import { raiseDispute, voteDispute } from "@/domain/disputes";
 import { fakeReceivedEmail, fakeRequestEmail } from "@/domain/fakeInterac";
@@ -10,6 +11,7 @@ import {
   createHouse,
   joinHouse,
   memberById,
+  normalizeEmail,
   setAutoReload,
   setPaused,
   setPayoutDetails,
@@ -25,6 +27,7 @@ import {
   markDebtSent,
   settleUpHouse,
   textDebtPaid,
+  textDebtSent,
   textNewDebts,
 } from "@/domain/settleup";
 import { claimBounty, markDone, payToSkip } from "@/domain/turns";
@@ -41,6 +44,7 @@ import { isOperator } from "@/lib/operator";
 import { safeNext } from "@/lib/session";
 import { formatCents } from "@/money";
 import { getProviders, inboundIsFake, paymentsAreFake } from "@/providers";
+import { cardHousesOn, signInBy } from "@/settings";
 import type { Schedule } from "@/time";
 
 const str = (fd: FormData, key: string) => String(fd.get(key) ?? "").trim();
@@ -54,25 +58,32 @@ function back(path: string, kind: "error" | "notice", message: string): never {
 
 // ── Signing in ────────────────────────────────────────────────────────────────
 
+/** What the person typed, as the address a code goes to: an email or a phone number, by setting. */
+const signInAddress = (typed: string): string | null =>
+  signInBy() === "email" ? normalizeEmail(typed) : normalizePhone(typed);
+
 export async function requestCodeAction(fd: FormData): Promise<void> {
   const next = safeNext(str(fd, "next"));
   const nextParam = `next=${encodeURIComponent(next)}`;
-  const phone = normalizePhone(str(fd, "phone"));
-  if (!phone) back(`/login?${nextParam}`, "error", "That does not look like a phone number.");
-  const sent = await requestCode(getDb(), getProviders().sms, phone, new Date());
-  const step2 = `/login?phone=${encodeURIComponent(phone)}&${nextParam}`;
+  const to = signInAddress(str(fd, "to"));
+  if (!to) {
+    const what = signInBy() === "email" ? "an email address" : "a phone number";
+    back(`/login?${nextParam}`, "error", `That does not look like ${what}.`);
+  }
+  const sent = await requestCode(getDb(), getProviders().sms, to, new Date());
+  const step2 = `/login?to=${encodeURIComponent(to)}&${nextParam}`;
   if (!sent.ok) back(step2, "error", sent.error ?? "Could not send a code.");
   redirect(step2);
 }
 
 export async function verifyCodeAction(fd: FormData): Promise<void> {
   const next = safeNext(str(fd, "next"));
-  const phone = normalizePhone(str(fd, "phone"));
-  if (!phone) redirect("/login");
-  const session = await verifyCode(getDb(), phone, str(fd, "code"), new Date());
+  const to = signInAddress(str(fd, "to"));
+  if (!to) redirect("/login");
+  const session = await verifyCode(getDb(), to, str(fd, "code"), new Date());
   if (!session) {
     back(
-      `/login?phone=${encodeURIComponent(phone)}&next=${encodeURIComponent(next)}`,
+      `/login?to=${encodeURIComponent(to)}&next=${encodeURIComponent(next)}`,
       "error",
       "That code is wrong or has expired.",
     );
@@ -121,6 +132,7 @@ export async function joinHouseAction(fd: FormData): Promise<void> {
 // ── Paying in ─────────────────────────────────────────────────────────────────
 
 export async function payAction(fd: FormData): Promise<void> {
+  if (!cardHousesOn()) notFound();
   const { member } = await requireMember();
   const saveCard = fd.get("saveCard") === "on";
   if (saveCard) await setAutoReload(getDb(), member.id, true);
@@ -135,7 +147,7 @@ export async function payAction(fd: FormData): Promise<void> {
 
 /** The "Pay" button on the pretend checkout page. Only exists while payments are fake. */
 export async function fakePayAction(fd: FormData): Promise<void> {
-  if (!paymentsAreFake()) notFound();
+  if (!paymentsAreFake() || !cardHousesOn()) notFound();
   let payload: { event: unknown; successUrl?: string };
   try {
     payload = JSON.parse(Buffer.from(str(fd, "p"), "base64url").toString());
@@ -240,7 +252,7 @@ async function textDisputePassed(accusedMemberId: string, choreName: string): Pr
   const balance = formatCents(await memberBalance(db, accusedMemberId));
   await getProviders()
     .sms.send(
-      accused.phone,
+      accused.contact,
       `The house voted that ${choreName} was not done. Your balance is now ${balance}. ${await baseUrl()}/house`,
     )
     .catch((err) => console.error("Dispute text failed:", err));
@@ -380,6 +392,57 @@ export async function leaveAction(): Promise<void> {
   redirect("/?notice=You%20left%20the%20house%20and%20were%20cashed%20out.");
 }
 
+// ── Bills ─────────────────────────────────────────────────────────────────────
+
+/** Bills only exist in houses that settle up by e-Transfer. */
+async function requireBillsHouse(next: string) {
+  const session = await requireMember(next);
+  if (session.house.moneyMode !== "etransfer") notFound();
+  return session;
+}
+
+export async function addBillAction(fd: FormData): Promise<void> {
+  const { member, house } = await requireBillsHouse("/bills/new");
+  const parsed = billInputFromForm(fd);
+  if (!parsed.ok) back("/bills/new", "error", parsed.error);
+  const added = await createBill(getDb(), {
+    houseId: house.id,
+    actorMemberId: member.id,
+    input: parsed.input,
+    clientToken: str(fd, "token") || undefined,
+    now: new Date(),
+  });
+  if (!added.ok) back("/bills/new", "error", added.error);
+  back("/bills", "notice", "Bill added.");
+}
+
+export async function editBillAction(fd: FormData): Promise<void> {
+  const billId = str(fd, "billId");
+  const path = `/bills/${encodeURIComponent(billId)}`;
+  const { member } = await requireBillsHouse(path);
+  const parsed = billInputFromForm(fd);
+  if (!parsed.ok) back(path, "error", parsed.error);
+  const edited = await editBill(getDb(), {
+    billId,
+    actorMemberId: member.id,
+    input: parsed.input,
+    now: new Date(),
+  });
+  if (!edited.ok) back(path, "error", edited.error);
+  back("/bills", "notice", "Bill updated.");
+}
+
+export async function deleteBillAction(fd: FormData): Promise<void> {
+  const { member } = await requireBillsHouse("/bills");
+  const deleted = await deleteBill(getDb(), {
+    billId: str(fd, "billId"),
+    actorMemberId: member.id,
+    now: new Date(),
+  });
+  if (!deleted.ok) back("/bills", "error", deleted.error);
+  back("/bills", "notice", "Bill deleted.");
+}
+
 // ── Settling up by e-Transfer ─────────────────────────────────────────────────
 
 export async function savePayoutAction(fd: FormData): Promise<void> {
@@ -397,12 +460,7 @@ export async function debtSentAction(fd: FormData): Promise<void> {
   const user = await requireUser("/settle");
   const sent = await markDebtSent(getDb(), { debtId: str(fd, "debtId"), userId: user.id, now: new Date() });
   if (!sent.ok) back("/settle", "error", sent.error);
-  await getProviders()
-    .sms.send(
-      sent.debt.toPhone,
-      `${sent.debt.fromName} says they sent you ${formatCents(sent.debt.amountCents)} by e-Transfer. It is marked paid as soon as Interac's email reaches Housepot, or tap Received: ${await baseUrl()}/settle`,
-    )
-    .catch((err) => console.error("Sent text failed:", err));
+  await textDebtSent(getProviders().sms, sent.debt, `${await baseUrl()}/settle`);
   back("/settle", "notice", `Marked as sent. ${sent.debt.toName} will confirm when it lands.`);
 }
 
@@ -496,7 +554,7 @@ export async function devSettleNowAction(): Promise<void> {
 
 export async function markSentAction(fd: FormData): Promise<void> {
   const user = await currentUser();
-  if (!user || !isOperator(user.phone)) notFound();
+  if (!user || !isOperator(user)) notFound();
   await markPayoutSent(getDb(), str(fd, "id"), new Date());
   redirect("/operator");
 }

@@ -269,4 +269,14 @@ describe("the email webhook", () => {
       [house.members[0].phone, house.members[1].phone].sort(),
     );
   });
+
+  test("answers 404 and marks nothing paid when Interac checking is off", async () => {
+    process.env.INBOUND_EMAIL_PROVIDER = "off";
+    try {
+      expect((await post(benGetsPaid())).status).toBe(404);
+      expect((await debtRow()).status).toBe("owed");
+    } finally {
+      delete process.env.INBOUND_EMAIL_PROVIDER;
+    }
+  });
 });

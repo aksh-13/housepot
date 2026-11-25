@@ -10,6 +10,7 @@ import { type DebtView, debtsForUser } from "@/domain/settleup";
 import { requireUser } from "@/lib/current";
 import { ago, dateLabel, dueLabel } from "@/lib/format";
 import { formatCents } from "@/money";
+import { inboundIsOff } from "@/providers";
 
 type Props = { searchParams: Promise<Record<string, string | string[] | undefined>> };
 
@@ -107,7 +108,7 @@ function YouPay({ d, bank, now, tz }: { d: DebtView; bank: string | null; now: D
           </form>
         </div>
       )}
-      {!d.requestUrl && (
+      {!d.requestUrl && !inboundIsOff() && (
         <p className="small muted" style={{ marginTop: "var(--space-3)" }}>
           Or ask {d.toName} to send you an Interac request. If your forwarding is set up, this turns into one
           tap.
@@ -127,7 +128,7 @@ function YouGet({ d, now, tz }: { d: DebtView; now: Date; tz: string }) {
         <span className="bounty">{amount}</span>
       </div>
       <Status d={d} now={now} tz={tz} />
-      {d.requestUrl ? (
+      {inboundIsOff() ? null : d.requestUrl ? (
         <p className="meta">Your Interac request reached Housepot. {d.fromName} can pay in one tap.</p>
       ) : (
         <div className="pay-steps">
@@ -157,9 +158,11 @@ function YouGet({ d, now, tz }: { d: DebtView; now: Date; tz: string }) {
           </SubmitButton>
         </form>
       </div>
-      <p className="small muted" style={{ marginTop: "var(--space-2)" }}>
-        With forwarding set up you do not need to tap this: Interac's email marks it paid.
-      </p>
+      {!inboundIsOff() && (
+        <p className="small muted" style={{ marginTop: "var(--space-2)" }}>
+          With forwarding set up you do not need to tap this: Interac's email marks it paid.
+        </p>
+      )}
     </article>
   );
 }
@@ -200,7 +203,7 @@ export default async function SettlePage({ searchParams }: Props) {
           </p>
         </section>
       )}
-      {member && !forwardingWorks && (
+      {member && !forwardingWorks && !inboundIsOff() && (
         <section className="callout">
           <h2>Let Housepot check payments for you</h2>
           <p>

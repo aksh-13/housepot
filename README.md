@@ -20,6 +20,16 @@ Built for student houses, where everyone knows whose turn it is and nobody does 
 
 The full design, with the reasons behind each rule, is in [`docs/superpowers/specs/2026-11-14-housepot-design.md`](docs/superpowers/specs/2026-11-14-housepot-design.md).
 
+## Bills
+
+In a house that settles up by e-Transfer, the same balance also tracks shared bills.
+
+- Anyone adds a bill: what it was, the total, who paid, and who shares it. Each sharer's part moves from their balance to the payer's.
+- **Split equally**, or **by receipt**: type the subtotal, the total paid, and what each person's own items came to. Anything left of the subtotal is shared equally, and tax and tip are spread in proportion to what each person had. On a $50 subtotal that came to $56.50, $30 of items costs $33.90 and $20 of items costs $22.60.
+- The parts always add up to the total. An odd cent goes to whoever paid.
+- The home screen shows the fewest payments that would square the house up right now. They become real debts at the next settle-up.
+- Any housemate can edit or delete a bill until a settle-up has happened. Every change shows in the activity feed, and nothing is erased from the ledger: an edit or delete writes opposite entries.
+
 ## Two ways a house can handle money
 
 Each house picks one when it is created. The chore rules above are the same in both.
@@ -30,7 +40,8 @@ Each house picks one when it is created. The chore rules above are the same in b
 | Skipping  | Always allowed; your score can go below zero.                                               | Only with enough balance.                                                      |
 | Settling  | On the 1st of each month the scores become a few "A pays B" e-Transfers between housemates. | Cash-out at the end of term: card refunds, plus e-Transfers from the operator. |
 | Cost      | Free. No money touches the app.                                                             | Card fees on every deposit.                                                    |
-| Needs     | Twilio for texts.                                                                           | Twilio and Stripe, and the legal check on holding money (see Going live).      |
+| Bills     | Yes.                                                                                        | No.                                                                            |
+| Needs     | A way to send sign-in codes (email or texts).                                               | The same, plus Stripe and the legal check on holding money (see Going live).   |
 
 ### How settling up works (e-Transfer houses)
 
@@ -78,7 +89,7 @@ pnpm dev
 
 Open http://localhost:3000. Nothing outside your laptop is needed:
 
-- **Texts are faked.** Sign-in codes and reminders are saved, not sent. Read them at `/dev/outbox`.
+- **Texts and emails are faked.** Sign-in codes and reminders are saved, not sent. Read them at `/dev/outbox`. Sign-in is by phone number unless you set `SIGN_IN=email`.
 - **Payments are faked.** "Pay" opens a pretend checkout page. No real money moves.
 - **Interac emails are faked.** In an e-Transfer house, `/dev/inbox` stands in for Interac emailing someone's forwarding address.
 - **Photos are saved to disk** under `.data/photos`.
@@ -92,7 +103,7 @@ curl -X POST -H "Authorization: Bearer dev-tick-secret" http://localhost:3000/ap
 ### Tests and checks
 
 ```sh
-pnpm test        # 226 tests against a real Postgres (pnpm db:up starts it)
+pnpm test        # 331 tests against a real Postgres (pnpm db:up starts it)
 pnpm lint        # Biome: lint and formatting
 pnpm typecheck
 pnpm build
@@ -147,10 +158,13 @@ src/domain/      the rules, as plain functions that take a database and a time
   disputes.ts    raising and voting
   tick.ts        the scheduler's heartbeat
   settlement.ts  cash-out, leaving, end of term
-  settleup.ts    e-Transfer houses: monthly settle-up, debts, reminders
+  settleup.ts    e-Transfer houses: monthly settle-up, debts, reminders, the live "to square up" list
+  split.ts       who owes what on a bill (plain arithmetic, also used by the form's preview)
+  bills.ts       shared bills: add, edit, delete, and their ledger entries
   inbound.ts     forwarded Interac emails: matching payments and money requests
   interac.ts     reading Interac's emails (wording not yet checked against real ones)
-src/providers/   texts, payments, photo storage: a real and a fake version of each
+src/providers/   texts, email, payments, photo storage: a real and a fake version of each
+src/settings.ts  deployment settings read from the environment
 src/app/         screens, form actions, API routes (Next.js)
 migrations/      the database schema
 test/            one file per domain module
@@ -175,32 +189,47 @@ All rules live in `src/domain` and are tested without the web layer. If you chan
 
 ## Settings
 
-| Variable                 | What it is                                                                                                                       |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`           | Postgres connection string.                                                                                                      |
-| `BASE_URL`               | Public address of the site. Used in text-message links and payment return pages.                                                 |
-| `TICK_SECRET`            | Shared secret the scheduler sends to `/api/internal/tick`.                                                                       |
-| `SMS_PROVIDER`           | `fake` or `twilio`. With `twilio`: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`.                                     |
-| `PAYMENTS_PROVIDER`      | `fake` or `stripe`. With `stripe`: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`.                                                 |
-| `STORAGE_PROVIDER`       | `disk` or `s3`. With `s3`: `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`.                  |
-| `OPERATOR_PHONES`        | Comma-separated phone numbers allowed to open `/operator`, the list of e-Transfers to send.                                      |
-| `INBOUND_EMAIL_PROVIDER` | `fake` (adds `/dev/inbox` and the pretend bank page) or `webhook` (real forwarded emails only). Must be `webhook` in production. |
-| `INBOUND_EMAIL_DOMAIN`   | The domain of the forwarding addresses, `pay-…@this-domain`.                                                                     |
-| `INBOUND_EMAIL_SECRET`   | Shared secret the mail receiver sends to `/api/webhooks/email`.                                                                  |
+| Variable                             | What it is                                                                                                                                                                                |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                       | Postgres connection string.                                                                                                                                                               |
+| `BASE_URL`                           | Public address of the site. Used in text-message links and payment return pages.                                                                                                          |
+| `TICK_SECRET`                        | Shared secret the scheduler sends to `/api/internal/tick`.                                                                                                                                |
+| `SMS_PROVIDER`                       | `fake` or `twilio`. With `twilio`: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`.                                                                                              |
+| `PAYMENTS_PROVIDER`                  | `fake` or `stripe`. With `stripe`: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`.                                                                                                          |
+| `STORAGE_PROVIDER`                   | `disk` or `s3`. With `s3`: `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`.                                                                           |
+| `OPERATOR_PHONES`, `OPERATOR_EMAILS` | Comma-separated phone numbers and emails allowed to open `/operator`, the list of e-Transfers to send.                                                                                    |
+| `SIGN_IN`                            | `phone` (a texted code, the default) or `email` (an emailed code). Reminders go the same way.                                                                                             |
+| `EMAIL_PROVIDER`                     | Used when `SIGN_IN=email`. `fake` (saved to `/dev/outbox`), `smtp` (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`) or `resend` (`RESEND_API_KEY`). Both real ones need `EMAIL_FROM`. |
+| `INBOUND_EMAIL_PROVIDER`             | `fake` (adds `/dev/inbox` and the pretend bank page), `webhook` (real forwarded emails only) or `off` (no checking; people use "I sent it" and "It arrived"). Never `fake` in production. |
+| `CARD_HOUSES`                        | `on` or `off`. `off` means e-Transfer houses only, and closes the pretend checkout and the payments webhook. Set `off` in production until Stripe is set up.                              |
+| `INBOUND_EMAIL_DOMAIN`               | The domain of the forwarding addresses, `pay-…@this-domain`.                                                                                                                              |
+| `INBOUND_EMAIL_SECRET`               | Shared secret the mail receiver sends to `/api/webhooks/email`.                                                                                                                           |
 
 ## Going live
 
-Not done yet. For a pilot with **e-Transfer houses only**, steps 1 and 2 are not needed: the app never holds money. Instead, receive email for `INBOUND_EMAIL_DOMAIN` (see "Checking payments automatically") and check the Interac email wording against real emails. Note that card houses can still be created from the new-house page, and they need Stripe.
+### Now: e-Transfer houses, no card payments
 
-In order:
+The app never holds money in this setup, so it needs no payment account. It has not been run in production yet, and neither real email sender has been run against the live service.
 
-1. **Check the rules on holding money.** The app holds housemates' deposits. Before anyone outside your own house uses it, confirm Stripe's terms allow holding deposits this way and check Canadian rules for holding funds on behalf of users. This is an open question, not a solved one.
-2. **Stripe.** Create an account, set `PAYMENTS_PROVIDER=stripe` and the two keys. Add a webhook pointing at `https://YOUR-DOMAIN/api/webhooks/payments` for the `checkout.session.completed` event. Test with Stripe's test cards first. The Stripe code path has not been run against a real Stripe account yet.
-3. **Twilio.** Buy a number, complete the registration Canadian numbers need, set `SMS_PROVIDER=twilio` and the three values. Also untested against the real service.
-4. **A database and photo storage.** Any managed Postgres and any S3-compatible bucket (S3, Cloudflare R2).
-5. **A cluster and a domain.** Any Kubernetes cluster with the nginx ingress controller and cert-manager. Put your domain in `k8s/overlays/prod/ingress.yaml` and `kustomization.yaml`, fill in `secret.env`, then `kubectl apply -k k8s/overlays/prod`.
-6. **Set `OPERATOR_PHONES`** to your number so you can see pending e-Transfers at `/operator`.
-7. **Let the cluster pull the image.** The repo is private, so the image on ghcr.io is too. Either make the package public, or create a pull secret named `ghcr-pull` in the `housepot` namespace (`kubectl create secret docker-registry ghcr-pull --docker-server=ghcr.io --docker-username=aksh-13 --docker-password=<a token with read:packages>`). The production overlay already refers to it.
+1. **A host and a database.** Anything that runs the `Dockerfile`, plus any managed Postgres. Run `node scripts/migrate.mjs` before each release (the Kubernetes manifests do this in an init container).
+2. **Production settings.** These four matter for safety; the production overlay in `k8s/overlays/prod` already sets them.
+   - `CARD_HOUSES=off`: nobody can start a card house, and the pretend checkout and the payments webhook are closed. Without it, the pretend payment provider would let anyone credit a balance.
+   - `INBOUND_EMAIL_PROVIDER=off`: no pretend Interac pages. People mark debts with "I sent it" and "It arrived".
+   - `SIGN_IN=email` with `EMAIL_PROVIDER=smtp` or `resend`, never `fake`: with a fake sender, `/dev/outbox` shows everyone's sign-in codes. In production the app refuses to start sending if `EMAIL_PROVIDER` is not set at all.
+   - `TICK_SECRET`: a long random string.
+3. **An email sender.**
+   - No domain yet: `EMAIL_PROVIDER=smtp` with a Gmail account and an app password (`SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=465`). The host must allow outgoing SMTP; Railway's Hobby plan does not.
+   - With a domain: `EMAIL_PROVIDER=resend`, which works over HTTPS on any host.
+4. **`BASE_URL`** set to the public address, and **`OPERATOR_EMAILS`** set to your own.
+5. **Photo storage.** Any S3-compatible bucket (S3, Cloudflare R2), or `STORAGE_PROVIDER=disk` with a persistent disk and a single copy of the app.
+6. **The tick.** Something must send `POST /api/internal/tick` with `Authorization: Bearer $TICK_SECRET` every five minutes. Without it no turns are handed out, no reminders go out and no settle-up happens. The Kubernetes manifests include a CronJob for it.
+7. **On Kubernetes:** any cluster with the nginx ingress controller and cert-manager. Put your domain in `k8s/overlays/prod/ingress.yaml` and `kustomization.yaml`, fill in `secret.env`, then `kubectl apply -k k8s/overlays/prod`. If the image on ghcr.io is private, create a pull secret named `ghcr-pull` in the `housepot` namespace (`kubectl create secret docker-registry ghcr-pull --docker-server=ghcr.io --docker-username=aksh-13 --docker-password=<a token with read:packages>`), or make the package public and delete that patch from the overlay.
+
+### Later
+
+- **Card houses.** First check the rules on holding money: confirm Stripe's terms allow holding deposits this way and check Canadian rules for holding funds on behalf of users. This is an open question, not a solved one. Then create a Stripe account, set `PAYMENTS_PROVIDER=stripe` and the two keys, add a webhook at `https://YOUR-DOMAIN/api/webhooks/payments` for `checkout.session.completed`, and set `CARD_HOUSES=on`. The Stripe code path has not been run against a real Stripe account.
+- **Texts instead of email.** `SIGN_IN=phone` and `SMS_PROVIDER=twilio` need a Twilio number and the registration Canadian numbers require, which takes days.
+- **Checking payments automatically.** Receive email for `INBOUND_EMAIL_DOMAIN`, set `INBOUND_EMAIL_PROVIDER=webhook`, and check the Interac email wording against real emails first (see "Checking payments automatically").
 
 ## Known limits
 
@@ -209,4 +238,5 @@ In order:
 - Settling up closes any chore that is up for grabs and shares its money out, like the end of term in a card house.
 - "Done" needs a photo, but nobody checks the photo unless a housemate disputes it.
 - One house per person.
-- Splitting bills (the Splitwise side) is not built.
+- Bills are split equally or by per-person receipt amounts. Item-by-item receipts, percentages, repeating bills and reading a receipt from a photo are not built.
+- Bills are for e-Transfer houses only.

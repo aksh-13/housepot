@@ -5,12 +5,13 @@ import { SubmitButton } from "@/components/buttons";
 import { PlainMasthead, param } from "@/components/frame";
 import { formatCents } from "@/money";
 import { paymentsAreFake } from "@/providers";
+import { cardHousesOn } from "@/settings";
 
 type Props = { searchParams: Promise<Record<string, string | string[] | undefined>> };
 
 /** Development only: stands in for the card processor's checkout page. No real money moves. */
 export default async function FakeCheckoutPage({ searchParams }: Props) {
-  if (!paymentsAreFake()) notFound();
+  if (!paymentsAreFake() || !cardHousesOn()) notFound();
   const p = param((await searchParams).p) ?? "";
   let amountCents = 0;
   let fee = 0;

@@ -2,6 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, test } from "vitest";
+import { createBill } from "@/domain/bills";
 import { createChore, ensureTurns } from "@/domain/chores";
 import { getHouse, joinHouse } from "@/domain/houses";
 import { choreBounty, memberBalance } from "@/domain/ledger";
@@ -9,12 +10,15 @@ import { savePhoto } from "@/domain/photos";
 import { leaveHouse, voteClosePot } from "@/domain/settlement";
 import {
   debtsForUser,
+  houseSquareUp,
   markDebtPaid,
   markDebtSent,
   minimalPayments,
   newDebtCode,
   PAY_WITHIN_MS,
   settleUpHouse,
+  textDebtSent,
+  textNewDebts,
 } from "@/domain/settleup";
 import { runTick } from "@/domain/tick";
 import { claimBounty, missTurn, payToSkip } from "@/domain/turns";
@@ -321,4 +325,89 @@ test("someone who joins an e-Transfer house later is active straight away", asyn
   expect(joined.ok).toBe(true);
   const { rows } = await db.query("select status from members where user_id = $1", [userId]);
   expect(rows[0].status).toBe("active");
+});
+
+test("with Interac checking off, the settle-up text does not mention an Interac request", async () => {
+  await aSkipsBClaims();
+  await db.query("update members set etransfer_email = 'ben@example.com' where id = $1", [b]);
+  await db.query("delete from sms_outbox");
+  process.env.INBOUND_EMAIL_PROVIDER = "off";
+  try {
+    const created = await settleUpHouse(db, { houseId: house.houseId, now: DEC_1, reason: "scheduled" });
+    await textNewDebts(db, sms, created, "https://housepot.test/settle");
+  } finally {
+    delete process.env.INBOUND_EMAIL_PROVIDER;
+  }
+  const toBen = (await texts()).filter((t) => t.to_phone === house.members[1].phone).map((t) => t.body);
+  expect(toBen).toEqual(["Housepot settle-up: Ana owes you $5. https://housepot.test/settle"]);
+});
+
+test("with Interac checking off, the 'sent' text does not promise automatic checking", async () => {
+  await aSkipsBClaims();
+  const [debt] = await settleUpHouse(db, { houseId: house.houseId, now: DEC_1, reason: "scheduled" });
+  const sent = await markDebtSent(db, { debtId: debt.id, userId: house.members[0].userId, now: DEC_1 });
+  if (!sent.ok) throw new Error(sent.error);
+  const toBen = async () =>
+    (await texts()).filter((t) => t.to_phone === house.members[1].phone).map((t) => t.body);
+
+  await db.query("delete from sms_outbox");
+  await textDebtSent(sms, sent.debt, "https://housepot.test/settle");
+  expect(await toBen()).toEqual([
+    "Ana says they sent you $5 by e-Transfer. It is marked paid as soon as Interac's email reaches Housepot, or tap Received: https://housepot.test/settle",
+  ]);
+
+  await db.query("delete from sms_outbox");
+  process.env.INBOUND_EMAIL_PROVIDER = "off";
+  try {
+    await textDebtSent(sms, sent.debt, "https://housepot.test/settle");
+  } finally {
+    delete process.env.INBOUND_EMAIL_PROVIDER;
+  }
+  expect(await toBen()).toEqual([
+    "Ana says they sent you $5 by e-Transfer. When it lands, tap It arrived: https://housepot.test/settle",
+  ]);
+});
+
+describe("houseSquareUp", () => {
+  const bill = async (paidBy: string, totalCents: number) => {
+    const r = await createBill(db, {
+      houseId: house.houseId,
+      actorMemberId: paidBy,
+      input: { description: "Bill", totalCents, paidByMemberId: paidBy, sharerMemberIds: [a, b, c] },
+      now: NOW,
+    });
+    if (!r.ok) throw new Error(r.error);
+  };
+
+  test("turns bills into the fewest payments", async () => {
+    await bill(a, 9000);
+    await bill(b, 3000);
+    expect(await balances()).toEqual([5000, -1000, -4000]);
+    expect(await houseSquareUp(db, house.houseId)).toEqual({
+      lines: [
+        { fromMemberId: c, toMemberId: a, amountCents: 4000, fromName: "Cy", toName: "Ana" },
+        { fromMemberId: b, toMemberId: a, amountCents: 1000, fromName: "Ben", toName: "Ana" },
+      ],
+      unclaimedCents: 0,
+    });
+  });
+
+  test("creates no debts and moves no money", async () => {
+    await bill(a, 9000);
+    const before = await balances();
+    await houseSquareUp(db, house.houseId);
+    expect(await debts()).toEqual([]);
+    expect(await balances()).toEqual(before);
+  });
+
+  test("reports money still waiting on a chore", async () => {
+    const turn = await waitingTurn();
+    await payToSkip(db, { turnId: turn.id, memberId: a, now: NOW });
+    expect(await houseSquareUp(db, house.houseId)).toEqual({ lines: [], unclaimedCents: 500 });
+    expect(await balances()).toEqual([-500, 0, 0]);
+  });
+
+  test("of an even house is empty", async () => {
+    expect(await houseSquareUp(db, house.houseId)).toEqual({ lines: [], unclaimedCents: 0 });
+  });
 });
