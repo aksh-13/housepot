@@ -236,7 +236,7 @@ export default async function SettingsPage({ searchParams }: Props) {
         <div className="setting">
           <div>
             <h3>Signed in as {user.name ?? "you"}</h3>
-            <p>{user.phone}</p>
+            <p>{user.email ?? user.phone}</p>
           </div>
           <form action={signOutAction}>
             <SubmitButton>Sign out</SubmitButton>

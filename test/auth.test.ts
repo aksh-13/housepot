@@ -1,5 +1,6 @@
 import { beforeEach, expect, test } from "vitest";
 import { normalizePhone, requestCode, sessionUser, setUserName, verifyCode } from "@/domain/auth";
+import { normalizeEmail } from "@/domain/houses";
 import { fakeSms } from "@/providers/sms";
 import { db, resetDb } from "./helpers";
 
@@ -77,7 +78,7 @@ test("a second code within thirty seconds is refused and no text is sent", async
 test("the code is not stored in readable form", async () => {
   await requestCode(db, fakeSms(db), PHONE, T0);
   const code = await lastCode();
-  const { rows } = await db.query("select code_hash from otp_codes where phone = $1", [PHONE]);
+  const { rows } = await db.query("select code_hash from otp_codes where address = $1", [PHONE]);
   expect(rows[0].code_hash).not.toContain(code);
 });
 
@@ -97,4 +98,53 @@ test("setUserName trims and stores the name", async () => {
   const s = await verifyCode(db, PHONE, await lastCode(), T0);
   await setUserName(db, s!.userId, "  Sam  ");
   expect((await sessionUser(db, s!.sessionToken, T0))?.name).toBe("Sam");
+});
+
+const EMAIL = "ana@example.com";
+
+test("an email code signs a person in and creates them with that email", async () => {
+  const sms = fakeSms(db);
+  expect(await requestCode(db, sms, EMAIL, T0)).toEqual({ ok: true });
+  const session = await verifyCode(db, EMAIL, await lastCode(), plus(MIN));
+  expect(session).not.toBeNull();
+  const { rows } = await db.query("select id, email, phone from users");
+  expect(rows).toEqual([{ id: session?.userId, email: EMAIL, phone: null }]);
+  expect(await sessionUser(db, session!.sessionToken, plus(2 * MIN))).toEqual({
+    id: session?.userId,
+    email: EMAIL,
+    phone: null,
+    name: null,
+  });
+});
+
+test("the same email in different capitals is one account", async () => {
+  const sms = fakeSms(db);
+  const typed = ["Ana@Example.com ", "ana@example.com"].map((t) => normalizeEmail(t)!);
+  await requestCode(db, sms, typed[0], T0);
+  const first = await verifyCode(db, typed[0], await lastCode(), plus(MIN));
+  await requestCode(db, sms, typed[1], plus(2 * MIN));
+  const second = await verifyCode(db, typed[1], await lastCode(), plus(3 * MIN));
+  expect(second?.userId).toBe(first?.userId);
+  expect((await db.query("select count(*)::int as n from users")).rows[0].n).toBe(1);
+});
+
+test("an email is not checked against the allowed phone prefixes", async () => {
+  process.env.SMS_ALLOWED_PREFIXES = "+44";
+  try {
+    expect(await requestCode(db, fakeSms(db), EMAIL, T0)).toEqual({ ok: true });
+  } finally {
+    delete process.env.SMS_ALLOWED_PREFIXES;
+  }
+});
+
+test("when the sender fails, asking for a code reports it instead of throwing", async () => {
+  const broken = {
+    send: async () => {
+      throw new Error("smtp down");
+    },
+  };
+  expect(await requestCode(db, broken, EMAIL, T0)).toEqual({
+    ok: false,
+    error: "Could not send the code. Try again in a minute.",
+  });
 });

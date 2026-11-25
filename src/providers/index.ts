@@ -1,10 +1,12 @@
 import path from "node:path";
 import { getDb } from "@/db";
-import { inboundMode } from "@/settings";
+import { emailProvider, inboundMode, signInBy } from "@/settings";
+import { resendEmail, smtpEmail } from "./email";
 import { fakePayments, type Payments, stripePayments } from "./payments";
 import { fakeSms, type Sms, twilioSms } from "./sms";
 import { diskStorage, type Storage, s3Storage } from "./storage";
 
+/** `sms` carries every message the app sends: texts, or emails when people sign in by email. */
 export type Providers = { sms: Sms; payments: Payments; storage: Storage };
 
 const cache = globalThis as unknown as { __housepotProviders?: { key: string; providers: Providers } };
@@ -21,7 +23,11 @@ function oneOf(name: string, value: string, allowed: string[]): void {
   }
 }
 
-export const smsIsFake = () => (process.env.SMS_PROVIDER ?? "fake") === "fake";
+/** Which service carries messages: an email sender when people sign in by email, otherwise texts. */
+const messageKind = (): string =>
+  signInBy() === "email" ? `email-${emailProvider()}` : (process.env.SMS_PROVIDER ?? "fake");
+/** True when messages are saved to the outbox instead of being sent. */
+export const smsIsFake = () => ["fake", "email-fake"].includes(messageKind());
 export const paymentsAreFake = () => (process.env.PAYMENTS_PROVIDER ?? "fake") === "fake";
 /**
  * fake: the development inbox (/dev/inbox) and pretend Interac page exist, so the whole settle-up
@@ -36,12 +42,12 @@ export const inboundIsOff = (): boolean => inboundMode() === "off";
  * texts land in the sms_outbox table, payments use a pretend checkout page, photos go to disk.
  */
 export function getProviders(): Providers {
-  const smsKind = process.env.SMS_PROVIDER ?? "fake";
+  const smsKind = messageKind();
   const paymentsKind = process.env.PAYMENTS_PROVIDER ?? "fake";
   const storageKind = process.env.STORAGE_PROVIDER ?? "disk";
   const photoDir = process.env.PHOTO_DIR ?? path.resolve(process.cwd(), ".data/photos");
   // A typo must never quietly select the fake provider: in production that would mean free deposits.
-  oneOf("SMS_PROVIDER", smsKind, ["fake", "twilio"]);
+  oneOf("SMS_PROVIDER", smsKind, ["fake", "twilio", "email-fake", "email-smtp", "email-resend"]);
   oneOf("PAYMENTS_PROVIDER", paymentsKind, ["fake", "stripe"]);
   oneOf("STORAGE_PROVIDER", storageKind, ["disk", "s3"]);
   const key = [smsKind, paymentsKind, storageKind, photoDir].join("|");
@@ -55,7 +61,17 @@ export function getProviders(): Providers {
             TWILIO_AUTH_TOKEN: need("TWILIO_AUTH_TOKEN"),
             TWILIO_FROM: need("TWILIO_FROM"),
           })
-        : fakeSms(getDb()),
+        : smsKind === "email-smtp"
+          ? smtpEmail({
+              SMTP_HOST: need("SMTP_HOST"),
+              SMTP_PORT: need("SMTP_PORT"),
+              SMTP_USER: need("SMTP_USER"),
+              SMTP_PASS: need("SMTP_PASS"),
+              EMAIL_FROM: need("EMAIL_FROM"),
+            })
+          : smsKind === "email-resend"
+            ? resendEmail({ RESEND_API_KEY: need("RESEND_API_KEY"), EMAIL_FROM: need("EMAIL_FROM") })
+            : fakeSms(getDb()),
     payments:
       paymentsKind === "stripe"
         ? stripePayments({

@@ -186,12 +186,12 @@ export type DebtView = {
   fromName: string;
   fromEmail: string | null;
   fromBank: string | null;
-  fromPhone: string;
+  fromContact: string;
   fromUserId: string;
   toMemberId: string;
   toName: string;
   toEmail: string | null;
-  toPhone: string;
+  toContact: string;
   toUserId: string;
 };
 
@@ -199,9 +199,9 @@ const DEBT_SELECT = `select d.id, d.house_id as "houseId", h.name as "houseName"
     d.code, d.status, d.paid_via as "paidVia", d.request_url as "requestUrl", d.due_at as "dueAt",
     d.created_at as "createdAt", d.paid_at as "paidAt",
     d.from_member_id as "fromMemberId", coalesce(fu.name, 'Housemate') as "fromName",
-    fm.etransfer_email as "fromEmail", fm.bank as "fromBank", fu.phone as "fromPhone", fu.id as "fromUserId",
+    fm.etransfer_email as "fromEmail", fm.bank as "fromBank", coalesce(fu.email, fu.phone) as "fromContact", fu.id as "fromUserId",
     d.to_member_id as "toMemberId", coalesce(tu.name, 'Housemate') as "toName",
-    tm.etransfer_email as "toEmail", tu.phone as "toPhone", tu.id as "toUserId"
+    tm.etransfer_email as "toEmail", coalesce(tu.email, tu.phone) as "toContact", tu.id as "toUserId"
   from debts d
   join houses h on h.id = d.house_id
   join members fm on fm.id = d.from_member_id join users fu on fu.id = fm.user_id
@@ -315,12 +315,12 @@ export async function textNewDebts(db: Db, sms: Sms, debts: CreatedDebt[], link:
     const amount = formatCents(d.amountCents);
     await send(
       sms,
-      d.fromPhone,
+      d.fromContact,
       `Housepot settle-up: you owe ${d.toName} ${amount}. Pay by e-Transfer and put ${d.code} in the message: ${link}`,
     );
     await send(
       sms,
-      d.toPhone,
+      d.toContact,
       inboundMode() === "off"
         ? `Housepot settle-up: ${d.fromName} owes you ${amount}. ${link}`
         : d.toEmail
@@ -333,6 +333,6 @@ export async function textNewDebts(db: Db, sms: Sms, debts: CreatedDebt[], link:
 /** Tells both sides a debt is cleared. */
 export async function textDebtPaid(sms: Sms, d: DebtView, link: string): Promise<void> {
   const amount = formatCents(d.amountCents);
-  await send(sms, d.fromPhone, `${d.toName} got your ${amount}. You are square. ${link}`);
-  await send(sms, d.toPhone, `${d.fromName}'s ${amount} arrived. Marked as paid. ${link}`);
+  await send(sms, d.fromContact, `${d.toName} got your ${amount}. You are square. ${link}`);
+  await send(sms, d.toContact, `${d.fromName}'s ${amount} arrived. Marked as paid. ${link}`);
 }

@@ -10,6 +10,7 @@ import {
   createHouse,
   joinHouse,
   memberById,
+  normalizeEmail,
   setAutoReload,
   setPaused,
   setPayoutDetails,
@@ -41,7 +42,7 @@ import { isOperator } from "@/lib/operator";
 import { safeNext } from "@/lib/session";
 import { formatCents } from "@/money";
 import { getProviders, inboundIsFake, paymentsAreFake } from "@/providers";
-import { cardHousesOn } from "@/settings";
+import { cardHousesOn, signInBy } from "@/settings";
 import type { Schedule } from "@/time";
 
 const str = (fd: FormData, key: string) => String(fd.get(key) ?? "").trim();
@@ -55,25 +56,32 @@ function back(path: string, kind: "error" | "notice", message: string): never {
 
 // ── Signing in ────────────────────────────────────────────────────────────────
 
+/** What the person typed, as the address a code goes to: an email or a phone number, by setting. */
+const signInAddress = (typed: string): string | null =>
+  signInBy() === "email" ? normalizeEmail(typed) : normalizePhone(typed);
+
 export async function requestCodeAction(fd: FormData): Promise<void> {
   const next = safeNext(str(fd, "next"));
   const nextParam = `next=${encodeURIComponent(next)}`;
-  const phone = normalizePhone(str(fd, "phone"));
-  if (!phone) back(`/login?${nextParam}`, "error", "That does not look like a phone number.");
-  const sent = await requestCode(getDb(), getProviders().sms, phone, new Date());
-  const step2 = `/login?phone=${encodeURIComponent(phone)}&${nextParam}`;
+  const to = signInAddress(str(fd, "to"));
+  if (!to) {
+    const what = signInBy() === "email" ? "an email address" : "a phone number";
+    back(`/login?${nextParam}`, "error", `That does not look like ${what}.`);
+  }
+  const sent = await requestCode(getDb(), getProviders().sms, to, new Date());
+  const step2 = `/login?to=${encodeURIComponent(to)}&${nextParam}`;
   if (!sent.ok) back(step2, "error", sent.error ?? "Could not send a code.");
   redirect(step2);
 }
 
 export async function verifyCodeAction(fd: FormData): Promise<void> {
   const next = safeNext(str(fd, "next"));
-  const phone = normalizePhone(str(fd, "phone"));
-  if (!phone) redirect("/login");
-  const session = await verifyCode(getDb(), phone, str(fd, "code"), new Date());
+  const to = signInAddress(str(fd, "to"));
+  if (!to) redirect("/login");
+  const session = await verifyCode(getDb(), to, str(fd, "code"), new Date());
   if (!session) {
     back(
-      `/login?phone=${encodeURIComponent(phone)}&next=${encodeURIComponent(next)}`,
+      `/login?to=${encodeURIComponent(to)}&next=${encodeURIComponent(next)}`,
       "error",
       "That code is wrong or has expired.",
     );
@@ -242,7 +250,7 @@ async function textDisputePassed(accusedMemberId: string, choreName: string): Pr
   const balance = formatCents(await memberBalance(db, accusedMemberId));
   await getProviders()
     .sms.send(
-      accused.phone,
+      accused.contact,
       `The house voted that ${choreName} was not done. Your balance is now ${balance}. ${await baseUrl()}/house`,
     )
     .catch((err) => console.error("Dispute text failed:", err));
@@ -401,7 +409,7 @@ export async function debtSentAction(fd: FormData): Promise<void> {
   if (!sent.ok) back("/settle", "error", sent.error);
   await getProviders()
     .sms.send(
-      sent.debt.toPhone,
+      sent.debt.toContact,
       `${sent.debt.fromName} says they sent you ${formatCents(sent.debt.amountCents)} by e-Transfer. It is marked paid as soon as Interac's email reaches Housepot, or tap Received: ${await baseUrl()}/settle`,
     )
     .catch((err) => console.error("Sent text failed:", err));
@@ -498,7 +506,7 @@ export async function devSettleNowAction(): Promise<void> {
 
 export async function markSentAction(fd: FormData): Promise<void> {
   const user = await currentUser();
-  if (!user || !isOperator(user.phone)) notFound();
+  if (!user || !isOperator(user)) notFound();
   await markPayoutSent(getDb(), str(fd, "id"), new Date());
   redirect("/operator");
 }

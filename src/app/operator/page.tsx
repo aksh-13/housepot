@@ -12,7 +12,7 @@ import { formatCents } from "@/money";
 /** The operator's to-do list: winnings that have to be sent by e-Transfer. */
 export default async function OperatorPage() {
   const user = await requireUser("/operator");
-  if (!isOperator(user.phone)) notFound();
+  if (!isOperator(user)) notFound();
   const payouts = await pendingManualPayouts(getDb());
   const now = new Date();
 
@@ -31,7 +31,7 @@ export default async function OperatorPage() {
                 <span className="bounty">{formatCents(p.amountCents)}</span>
               </div>
               <p className="meta">
-                {p.phone} · {p.houseName} · {ago(p.createdAt, now)}
+                {p.contact} · {p.houseName} · {ago(p.createdAt, now)}
               </p>
               <div className="actions actions-one">
                 <form action={markSentAction}>

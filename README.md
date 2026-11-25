@@ -175,19 +175,21 @@ All rules live in `src/domain` and are tested without the web layer. If you chan
 
 ## Settings
 
-| Variable                 | What it is                                                                                                                                                                                |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`           | Postgres connection string.                                                                                                                                                               |
-| `BASE_URL`               | Public address of the site. Used in text-message links and payment return pages.                                                                                                          |
-| `TICK_SECRET`            | Shared secret the scheduler sends to `/api/internal/tick`.                                                                                                                                |
-| `SMS_PROVIDER`           | `fake` or `twilio`. With `twilio`: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`.                                                                                              |
-| `PAYMENTS_PROVIDER`      | `fake` or `stripe`. With `stripe`: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`.                                                                                                          |
-| `STORAGE_PROVIDER`       | `disk` or `s3`. With `s3`: `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`.                                                                           |
-| `OPERATOR_PHONES`        | Comma-separated phone numbers allowed to open `/operator`, the list of e-Transfers to send.                                                                                               |
-| `INBOUND_EMAIL_PROVIDER` | `fake` (adds `/dev/inbox` and the pretend bank page), `webhook` (real forwarded emails only) or `off` (no checking; people use "I sent it" and "It arrived"). Never `fake` in production. |
-| `CARD_HOUSES`            | `on` or `off`. `off` means e-Transfer houses only, and closes the pretend checkout and the payments webhook. Set `off` in production until Stripe is set up.                              |
-| `INBOUND_EMAIL_DOMAIN`   | The domain of the forwarding addresses, `pay-…@this-domain`.                                                                                                                              |
-| `INBOUND_EMAIL_SECRET`   | Shared secret the mail receiver sends to `/api/webhooks/email`.                                                                                                                           |
+| Variable                             | What it is                                                                                                                                                                                |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                       | Postgres connection string.                                                                                                                                                               |
+| `BASE_URL`                           | Public address of the site. Used in text-message links and payment return pages.                                                                                                          |
+| `TICK_SECRET`                        | Shared secret the scheduler sends to `/api/internal/tick`.                                                                                                                                |
+| `SMS_PROVIDER`                       | `fake` or `twilio`. With `twilio`: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`.                                                                                              |
+| `PAYMENTS_PROVIDER`                  | `fake` or `stripe`. With `stripe`: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`.                                                                                                          |
+| `STORAGE_PROVIDER`                   | `disk` or `s3`. With `s3`: `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`.                                                                           |
+| `OPERATOR_PHONES`, `OPERATOR_EMAILS` | Comma-separated phone numbers and emails allowed to open `/operator`, the list of e-Transfers to send.                                                                                    |
+| `SIGN_IN`                            | `phone` (a texted code, the default) or `email` (an emailed code). Reminders go the same way.                                                                                             |
+| `EMAIL_PROVIDER`                     | Used when `SIGN_IN=email`. `fake` (saved to `/dev/outbox`), `smtp` (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`) or `resend` (`RESEND_API_KEY`). Both real ones need `EMAIL_FROM`. |
+| `INBOUND_EMAIL_PROVIDER`             | `fake` (adds `/dev/inbox` and the pretend bank page), `webhook` (real forwarded emails only) or `off` (no checking; people use "I sent it" and "It arrived"). Never `fake` in production. |
+| `CARD_HOUSES`                        | `on` or `off`. `off` means e-Transfer houses only, and closes the pretend checkout and the payments webhook. Set `off` in production until Stripe is set up.                              |
+| `INBOUND_EMAIL_DOMAIN`               | The domain of the forwarding addresses, `pay-…@this-domain`.                                                                                                                              |
+| `INBOUND_EMAIL_SECRET`               | Shared secret the mail receiver sends to `/api/webhooks/email`.                                                                                                                           |
 
 ## Going live
 
@@ -197,10 +199,10 @@ In order:
 
 1. **Check the rules on holding money.** The app holds housemates' deposits. Before anyone outside your own house uses it, confirm Stripe's terms allow holding deposits this way and check Canadian rules for holding funds on behalf of users. This is an open question, not a solved one.
 2. **Stripe.** Create an account, set `PAYMENTS_PROVIDER=stripe` and the two keys. Add a webhook pointing at `https://YOUR-DOMAIN/api/webhooks/payments` for the `checkout.session.completed` event. Test with Stripe's test cards first. The Stripe code path has not been run against a real Stripe account yet.
-3. **Twilio.** Buy a number, complete the registration Canadian numbers need, set `SMS_PROVIDER=twilio` and the three values. Also untested against the real service.
+3. **Messages.** Set `SIGN_IN=email` and pick an email sender. With no domain: `EMAIL_PROVIDER=smtp` and a Gmail account with an app password, on a host that allows outgoing SMTP (Railway's Hobby plan does not). With a domain: `EMAIL_PROVIDER=resend`. Texts instead (`SIGN_IN=phone`, `SMS_PROVIDER=twilio`) need a Twilio number and the registration Canadian numbers require, which takes days. Neither real sender has been run against the live service yet.
 4. **A database and photo storage.** Any managed Postgres and any S3-compatible bucket (S3, Cloudflare R2).
 5. **A cluster and a domain.** Any Kubernetes cluster with the nginx ingress controller and cert-manager. Put your domain in `k8s/overlays/prod/ingress.yaml` and `kustomization.yaml`, fill in `secret.env`, then `kubectl apply -k k8s/overlays/prod`.
-6. **Set `OPERATOR_PHONES`** to your number so you can see pending e-Transfers at `/operator`.
+6. **Set `OPERATOR_EMAILS`** (or `OPERATOR_PHONES`) to your own so you can see pending e-Transfers at `/operator`.
 7. **Let the cluster pull the image.** The repo is private, so the image on ghcr.io is too. Either make the package public, or create a pull secret named `ghcr-pull` in the `housepot` namespace (`kubectl create secret docker-registry ghcr-pull --docker-server=ghcr.io --docker-username=aksh-13 --docker-password=<a token with read:packages>`). The production overlay already refers to it.
 
 ## Known limits

@@ -64,7 +64,7 @@ export async function textBountyOpen(
   for (const m of await activeMembers(db, a.houseId)) {
     if (m.id === a.exceptMemberId) continue;
     await sms
-      .send(m.phone, `${a.choreName} is open: +${bounty} to whoever does it, with a photo. ${a.link}`)
-      .catch((err) => console.error(`Text to ${m.phone} failed:`, err));
+      .send(m.contact, `${a.choreName} is open: +${bounty} to whoever does it, with a photo. ${a.link}`)
+      .catch((err) => console.error(`Text to ${m.contact} failed:`, err));
   }
 }

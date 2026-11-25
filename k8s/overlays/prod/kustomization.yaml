@@ -34,6 +34,9 @@ configMapGenerator:
   - name: housepot-config
     literals:
       - BASE_URL=https://housepot.example.com
+      # People sign in with an emailed code, and reminders go by email.
+      - SIGN_IN=email
+      - EMAIL_PROVIDER=resend
       # Card payments are not set up yet: e-Transfer houses only, and nothing can credit a balance.
       - CARD_HOUSES=off
       - PAYMENTS_PROVIDER=fake

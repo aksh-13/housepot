@@ -68,13 +68,13 @@ async function chargeMisses(ctx: Ctx, house: House, members: Member[]): Promise<
         const balance = formatCents(await memberBalance(ctx.db, m.id));
         await send(
           ctx,
-          m.phone,
+          m.contact,
           `You missed ${turn.name}. ${bounty} moved out of your balance (now ${balance}). Do it before a housemate does to win it back: ${ctx.link}`,
         );
       } else {
         await send(
           ctx,
-          m.phone,
+          m.contact,
           `${turn.name} is open: +${bounty} to whoever does it, with a photo. ${ctx.link}`,
         );
       }
@@ -115,7 +115,11 @@ async function sendReminders(ctx: Ctx, house: House, members: Member[]): Promise
         [turn.id, ctx.now],
       );
       if (claimed.rowCount === 0) continue;
-      await send(ctx, assignee.phone, `2 hours left for ${turn.name} (by ${by}). Done or skip: ${ctx.link}`);
+      await send(
+        ctx,
+        assignee.contact,
+        `2 hours left for ${turn.name} (by ${by}). Done or skip: ${ctx.link}`,
+      );
       ctx.summary.reminders += 1;
     } else if (morningDue) {
       const claimed = await ctx.db.query(
@@ -123,7 +127,7 @@ async function sendReminders(ctx: Ctx, house: House, members: Member[]): Promise
         [turn.id, ctx.now],
       );
       if (claimed.rowCount === 0) continue;
-      await send(ctx, assignee.phone, `${turn.name} is yours today, by ${by}. Done or skip: ${ctx.link}`);
+      await send(ctx, assignee.contact, `${turn.name} is yours today, by ${by}. Done or skip: ${ctx.link}`);
       ctx.summary.reminders += 1;
     }
   }
@@ -158,7 +162,7 @@ async function autoReload(ctx: Ctx, house: House, members: Member[]): Promise<vo
         kind: "auto_reload_failed",
         now: ctx.now,
       });
-      await send(ctx, m.phone, `Your card was declined, so auto-reload is off. Top up here: ${ctx.link}`);
+      await send(ctx, m.contact, `Your card was declined, so auto-reload is off. Top up here: ${ctx.link}`);
     }
   }
 }
@@ -178,7 +182,7 @@ async function requestTopups(ctx: Ctx, house: House, members: Member[]): Promise
     const due = formatCents(house.depositCents - balance);
     await send(
       ctx,
-      m.phone,
+      m.contact,
       `Your Housepot balance is ${formatCents(balance)}. Top up ${due} to get back to ${formatCents(house.depositCents)}: ${ctx.link}`,
     );
     ctx.summary.topupRequests += 1;
@@ -196,11 +200,11 @@ async function remindDebts(ctx: Ctx, house: House): Promise<void> {
     reminders: number;
     amount_cents: number;
     code: string;
-    from_phone: string;
+    from_contact: string;
     to_name: string;
     overdue: boolean;
   }>(
-    `select d.id, d.reminders, d.amount_cents, d.code, fu.phone as from_phone,
+    `select d.id, d.reminders, d.amount_cents, d.code, coalesce(fu.email, fu.phone) as from_contact,
             coalesce(tu.name, 'Housemate') as to_name, d.due_at <= $2 as overdue
      from debts d
      join members fm on fm.id = d.from_member_id join users fu on fu.id = fm.user_id
@@ -219,7 +223,7 @@ async function remindDebts(ctx: Ctx, house: House): Promise<void> {
     const amount = formatCents(d.amount_cents);
     await send(
       ctx,
-      d.from_phone,
+      d.from_contact,
       d.overdue
         ? `Your ${amount} to ${d.to_name} is overdue. You cannot win chore money until it is paid. Put ${d.code} in the e-Transfer message: ${ctx.settleLink}`
         : `Reminder: you owe ${d.to_name} ${amount}. Put ${d.code} in the e-Transfer message: ${ctx.settleLink}`,

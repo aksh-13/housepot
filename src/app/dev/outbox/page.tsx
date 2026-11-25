@@ -4,7 +4,7 @@ import { getDb } from "@/db";
 import { ago } from "@/lib/format";
 import { smsIsFake } from "@/providers";
 
-/** Development only: the texts that would have been sent, newest first. */
+/** Development only: the texts and emails that would have been sent, newest first. */
 export default async function OutboxPage() {
   if (!smsIsFake()) notFound();
   const { rows } = await getDb().query<{ id: string; to_phone: string; body: string; created_at: Date }>(
@@ -14,13 +14,13 @@ export default async function OutboxPage() {
   return (
     <main className="shell">
       <PlainMasthead />
-      <h1 className="house-name">Text outbox</h1>
+      <h1 className="house-name">Message outbox</h1>
       <p className="muted small" style={{ marginTop: "var(--space-2)" }}>
-        Texts are switched off (SMS_PROVIDER=fake). These are the messages that would have gone out.
+        Messages are switched off here. These are the texts and emails that would have gone out.
       </p>
       <section className="section">
         {rows.length === 0 ? (
-          <p className="empty">No texts yet.</p>
+          <p className="empty">No messages yet.</p>
         ) : (
           <ul className="mono-list">
             {rows.map((t) => (

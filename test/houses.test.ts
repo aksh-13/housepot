@@ -163,3 +163,27 @@ test("an e-Transfer house can still be created when card houses are off", async 
   });
   expect(created.ok).toBe(true);
 });
+
+test("joining an e-Transfer house saves the sign-in email as the e-Transfer email", async () => {
+  const ana = await makeUser("Ana", { email: "ana@example.com" });
+  const ben = await makeUser("Ben", { email: "ben@example.com" });
+  const cy = await makeUser("Cy");
+  const house = await createHouse(db, { userId: ana, houseName: "12 Elm", moneyMode: "etransfer", now: NOW });
+  if (!house.ok) throw new Error(house.error);
+  await joinHouse(db, { userId: ben, inviteCode: house.inviteCode, now: NOW });
+  await joinHouse(db, { userId: cy, inviteCode: house.inviteCode, now: NOW });
+  expect((await memberForUser(db, ana))?.etransferEmail).toBe("ana@example.com");
+  expect((await memberForUser(db, ben))?.etransferEmail).toBe("ben@example.com");
+  expect((await memberForUser(db, cy))?.etransferEmail).toBeNull();
+});
+
+test("a member's contact is their email when they have one, otherwise their phone", async () => {
+  const ana = await makeUser("Ana", { email: "ana@example.com" });
+  const ben = await makeUser("Ben");
+  const house = await createHouse(db, { userId: ana, houseName: "12 Elm", moneyMode: "etransfer", now: NOW });
+  if (!house.ok) throw new Error(house.error);
+  await joinHouse(db, { userId: ben, inviteCode: house.inviteCode, now: NOW });
+  expect((await memberForUser(db, ana))?.contact).toBe("ana@example.com");
+  const benPhone = (await db.query("select phone from users where id = $1", [ben])).rows[0].phone;
+  expect((await memberForUser(db, ben))?.contact).toBe(benPhone);
+});

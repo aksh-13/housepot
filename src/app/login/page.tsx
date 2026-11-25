@@ -6,6 +6,7 @@ import { Flash, PlainMasthead, param } from "@/components/frame";
 import { currentUser } from "@/lib/current";
 import { safeNext } from "@/lib/session";
 import { smsIsFake } from "@/providers";
+import { signInBy } from "@/settings";
 
 type Props = { searchParams: Promise<Record<string, string | string[] | undefined>> };
 
@@ -13,23 +14,24 @@ export default async function LoginPage({ searchParams }: Props) {
   const params = await searchParams;
   const next = safeNext(param(params.next));
   if (await currentUser()) redirect(next);
-  const phone = param(params.phone);
+  const to = param(params.to);
+  const byEmail = signInBy() === "email";
 
   return (
     <main className="shell">
       <PlainMasthead />
       <Flash params={params} />
       <section className="section">
-        <h1 className="house-name">{phone ? "Enter your code" : "Sign in"}</h1>
+        <h1 className="house-name">{to ? "Enter your code" : "Sign in"}</h1>
         <p className="muted small" style={{ margin: "var(--space-2) 0 var(--space-5)" }}>
-          {phone
-            ? `We texted a 6-digit code to ${phone}. It works for 10 minutes.`
-            : "No password. We text you a code each time."}
+          {to
+            ? `We ${byEmail ? "emailed" : "texted"} a 6-digit code to ${to}. It works for 10 minutes.`
+            : `No password. We ${byEmail ? "email" : "text"} you a code each time.`}
         </p>
 
-        {phone ? (
+        {to ? (
           <form action={verifyCodeAction}>
-            <input type="hidden" name="phone" value={phone} />
+            <input type="hidden" name="to" value={to} />
             <input type="hidden" name="next" value={next} />
             <div className="field">
               <label htmlFor="code">Code</label>
@@ -51,12 +53,12 @@ export default async function LoginPage({ searchParams }: Props) {
             </SubmitButton>
             <p className="small" style={{ marginTop: "var(--space-4)" }}>
               <Link href={`/login?next=${encodeURIComponent(next)}`} className="muted">
-                Use a different number
+                {byEmail ? "Use a different email" : "Use a different number"}
               </Link>
             </p>
             {smsIsFake() && (
               <p className="small muted" style={{ marginTop: "var(--space-2)" }}>
-                Texts are switched off here. <Link href="/dev/outbox">Read the code in the outbox.</Link>
+                Messages are switched off here. <Link href="/dev/outbox">Read the code in the outbox.</Link>
               </p>
             )}
           </form>
@@ -64,20 +66,33 @@ export default async function LoginPage({ searchParams }: Props) {
           <form action={requestCodeAction}>
             <input type="hidden" name="next" value={next} />
             <div className="field">
-              <label htmlFor="phone">Mobile number</label>
-              <input
-                id="phone"
-                name="phone"
-                className="input"
-                type="tel"
-                inputMode="tel"
-                autoComplete="tel"
-                placeholder="905 555 0100"
-                required
-              />
+              <label htmlFor="to">{byEmail ? "Email" : "Mobile number"}</label>
+              {byEmail ? (
+                <input
+                  id="to"
+                  name="to"
+                  className="input"
+                  type="email"
+                  inputMode="email"
+                  autoComplete="email"
+                  placeholder="you@example.com"
+                  required
+                />
+              ) : (
+                <input
+                  id="to"
+                  name="to"
+                  className="input"
+                  type="tel"
+                  inputMode="tel"
+                  autoComplete="tel"
+                  placeholder="905 555 0100"
+                  required
+                />
+              )}
             </div>
             <SubmitButton className="btn btn-primary btn-block" pendingLabel="Sending…">
-              Text me a code
+              {byEmail ? "Email me a code" : "Text me a code"}
             </SubmitButton>
           </form>
         )}
