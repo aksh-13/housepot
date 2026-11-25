@@ -17,7 +17,9 @@ export type TransferKind =
   | "debt_carried"
   | "escrow_return"
   /** e-Transfer houses: a settle-up debt moves the winner and the loser back to zero. */
-  | "settle_up";
+  | "settle_up"
+  | "expense"
+  | "expense_reversal";
 
 type TransferArgs = {
   houseId: string;

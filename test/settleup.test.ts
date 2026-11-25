@@ -338,3 +338,9 @@ test("with Interac checking off, the settle-up text does not mention an Interac 
   const toBen = (await texts()).filter((t) => t.to_phone === house.members[1].phone).map((t) => t.body);
   expect(toBen).toEqual(["Housepot settle-up: Ana owes you $5. https://housepot.test/settle"]);
 });
+
+test("settling up records when it happened, so earlier bills can be locked", async () => {
+  expect((await db.query("select last_settled_at from houses")).rows[0].last_settled_at).toBeNull();
+  await settleUpHouse(db, { houseId: house.houseId, now: DEC_1, reason: "scheduled" });
+  expect((await db.query("select last_settled_at from houses")).rows[0].last_settled_at).toEqual(DEC_1);
+});
