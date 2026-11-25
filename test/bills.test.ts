@@ -396,3 +396,45 @@ test("money that does not parse is refused with the field named", () => {
     error: "One of the item amounts is not an amount of money.",
   });
 });
+
+// The lock must follow what a settle-up actually swept up, not a comparison of two clocks: the
+// scheduler and the web pods each read their own time, and a request can wait on the house lock.
+test("a bill swept up by a settle-up is locked even if the settle-up's clock read earlier", async () => {
+  const billId = await add(groceries(), ana, LATER);
+  await settleUpHouse(db, { houseId: house.houseId, now: NOW, reason: "scheduled" });
+  expect((await billById(db, billId))?.locked).toBe(true);
+  expect(await deleteBill(db, { billId, actorMemberId: ana, now: AFTER })).toEqual({
+    ok: false,
+    error: LOCKED,
+  });
+});
+
+test("a bill added after a settle-up is not locked even if its clock read earlier", async () => {
+  await settleUpHouse(db, { houseId: house.houseId, now: LATER, reason: "scheduled" });
+  const billId = await add(groceries(), ana, NOW);
+  expect((await billById(db, billId))?.locked).toBe(false);
+  expect(await deleteBill(db, { billId, actorMemberId: ana, now: AFTER })).toEqual({ ok: true });
+});
+
+test("a form token reused for a different bill adds that bill too", async () => {
+  const first = await add(groceries(), ana, NOW, "t1");
+  const second = await add(groceries({ description: "Internet", totalCents: 6000 }), ana, LATER, "t1");
+  expect(second).not.toBe(first);
+  expect((await houseBills(db, house.houseId)).map((b) => b.description)).toEqual(["Internet", "Groceries"]);
+  expect(await balances()).toEqual([10000, -5000, -5000]);
+});
+
+test("the same form token in two houses makes a bill in each", async () => {
+  const other = await makeHouse(2, { moneyMode: "etransfer" });
+  const [m1, m2] = other.members.map((m) => m.memberId);
+  await add(groceries(), ana, NOW, "t1");
+  const there = await createBill(db, {
+    houseId: other.houseId,
+    actorMemberId: m1,
+    input: groceries({ paidByMemberId: m1, sharerMemberIds: [m1, m2] }),
+    clientToken: "t1",
+    now: NOW,
+  });
+  expect(there.ok).toBe(true);
+  expect(await count("bills")).toBe(2);
+});

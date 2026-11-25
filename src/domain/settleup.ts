@@ -180,11 +180,14 @@ export async function settleUpHouse(
     }
 
     await t.query("delete from close_votes where house_id = $1", [a.houseId]);
-    // last_settled_at locks the bills that this settle-up has just turned into debts.
-    await t.query("update houses set settlement_date = $2, last_settled_at = $3 where id = $1", [
+    // Every bill so far is part of these debts now, so it can no longer be edited or deleted.
+    await t.query(
+      "update bills set settled_at = $2 where house_id = $1 and settled_at is null and deleted_at is null",
+      [a.houseId, a.now],
+    );
+    await t.query("update houses set settlement_date = $2 where id = $1", [
       a.houseId,
       nextMonthStart(a.now, house.tz),
-      a.now,
     ]);
     await logActivity(t, {
       houseId: a.houseId,
@@ -368,6 +371,18 @@ export async function textNewDebts(db: Db, sms: Sms, debts: CreatedDebt[], link:
           : `Housepot settle-up: ${d.fromName} owes you ${amount}. Add your e-Transfer email so they can pay you: ${link}`,
     );
   }
+}
+
+/** Tells the person owed that the payer says the money is on its way. */
+export async function textDebtSent(sms: Sms, d: DebtView, link: string): Promise<void> {
+  const said = `${d.fromName} says they sent you ${formatCents(d.amountCents)} by e-Transfer.`;
+  await send(
+    sms,
+    d.toContact,
+    inboundMode() === "off"
+      ? `${said} When it lands, tap It arrived: ${link}`
+      : `${said} It is marked paid as soon as Interac's email reaches Housepot, or tap Received: ${link}`,
+  );
 }
 
 /** Tells both sides a debt is cleared. */

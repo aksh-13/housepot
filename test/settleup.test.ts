@@ -17,6 +17,7 @@ import {
   newDebtCode,
   PAY_WITHIN_MS,
   settleUpHouse,
+  textDebtSent,
   textNewDebts,
 } from "@/domain/settleup";
 import { runTick } from "@/domain/tick";
@@ -341,10 +342,30 @@ test("with Interac checking off, the settle-up text does not mention an Interac 
   expect(toBen).toEqual(["Housepot settle-up: Ana owes you $5. https://housepot.test/settle"]);
 });
 
-test("settling up records when it happened, so earlier bills can be locked", async () => {
-  expect((await db.query("select last_settled_at from houses")).rows[0].last_settled_at).toBeNull();
-  await settleUpHouse(db, { houseId: house.houseId, now: DEC_1, reason: "scheduled" });
-  expect((await db.query("select last_settled_at from houses")).rows[0].last_settled_at).toEqual(DEC_1);
+test("with Interac checking off, the 'sent' text does not promise automatic checking", async () => {
+  await aSkipsBClaims();
+  const [debt] = await settleUpHouse(db, { houseId: house.houseId, now: DEC_1, reason: "scheduled" });
+  const sent = await markDebtSent(db, { debtId: debt.id, userId: house.members[0].userId, now: DEC_1 });
+  if (!sent.ok) throw new Error(sent.error);
+  const toBen = async () =>
+    (await texts()).filter((t) => t.to_phone === house.members[1].phone).map((t) => t.body);
+
+  await db.query("delete from sms_outbox");
+  await textDebtSent(sms, sent.debt, "https://housepot.test/settle");
+  expect(await toBen()).toEqual([
+    "Ana says they sent you $5 by e-Transfer. It is marked paid as soon as Interac's email reaches Housepot, or tap Received: https://housepot.test/settle",
+  ]);
+
+  await db.query("delete from sms_outbox");
+  process.env.INBOUND_EMAIL_PROVIDER = "off";
+  try {
+    await textDebtSent(sms, sent.debt, "https://housepot.test/settle");
+  } finally {
+    delete process.env.INBOUND_EMAIL_PROVIDER;
+  }
+  expect(await toBen()).toEqual([
+    "Ana says they sent you $5 by e-Transfer. When it lands, tap It arrived: https://housepot.test/settle",
+  ]);
 });
 
 describe("houseSquareUp", () => {

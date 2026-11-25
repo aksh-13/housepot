@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { resendEmail, subjectFor } from "@/providers/email";
+import { resendEmail, SEND_TIMEOUT_MS, smtpOptions, subjectFor } from "@/providers/email";
 
 test("subjectFor takes the first sentence", () => {
   expect(subjectFor("Your Housepot code is 123456. It works for 10 minutes.")).toBe(
@@ -45,4 +45,38 @@ test("resendEmail throws when Resend refuses", async () => {
   await expect(resendEmail(ENV, refuse).send("ana@example.com", "Hello.")).rejects.toThrow(
     /422.*domain not verified/,
   );
+});
+
+// A host that blocks SMTP leaves the connection hanging. Without a limit the person asking for a
+// sign-in code waits minutes and then sees the host's error page instead of ours.
+test("an SMTP send gives up after ten seconds at every stage", () => {
+  const options = smtpOptions({
+    SMTP_HOST: "smtp.example.com",
+    SMTP_PORT: "465",
+    SMTP_USER: "u",
+    SMTP_PASS: "p",
+    EMAIL_FROM: "x@example.com",
+  });
+  expect(SEND_TIMEOUT_MS).toBe(10_000);
+  expect(options).toMatchObject({
+    host: "smtp.example.com",
+    port: 465,
+    secure: true,
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 10_000,
+  });
+  expect(
+    smtpOptions({ SMTP_HOST: "h", SMTP_PORT: "587", SMTP_USER: "u", SMTP_PASS: "p", EMAIL_FROM: "f" }).secure,
+  ).toBe(false);
+});
+
+test("a Resend send carries a time limit", async () => {
+  let signal: AbortSignal | null | undefined;
+  const fakeFetch = async (_url: string | URL | Request, init?: RequestInit) => {
+    signal = init?.signal;
+    return new Response("{}", { status: 200 });
+  };
+  await resendEmail(ENV, fakeFetch).send("ana@example.com", "Hello.");
+  expect(signal).toBeInstanceOf(AbortSignal);
 });

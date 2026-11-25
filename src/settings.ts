@@ -25,6 +25,16 @@ export const inboundMode = (): "fake" | "webhook" | "off" =>
 /** Whether people sign in with a code sent to their phone or to their email. */
 export const signInBy = (): "phone" | "email" => setting("SIGN_IN", ["phone", "email"], "phone");
 
-/** What sends email when people sign in by email. fake saves messages to the outbox instead. */
-export const emailProvider = (): "fake" | "smtp" | "resend" =>
-  setting("EMAIL_PROVIDER", ["fake", "smtp", "resend"], "fake");
+/**
+ * What sends email when people sign in by email. fake saves messages to the outbox instead, where
+ * /dev/outbox shows them, sign-in codes included. So in production there is no default: fake has to
+ * be written down on purpose, and a forgotten variable stops the app instead of exposing codes.
+ */
+export function emailProvider(): "fake" | "smtp" | "resend" {
+  if (process.env.EMAIL_PROVIDER === undefined && process.env.NODE_ENV === "production") {
+    throw new Error(
+      "EMAIL_PROVIDER must be set in production: smtp, resend, or fake to save emails to /dev/outbox",
+    );
+  }
+  return setting("EMAIL_PROVIDER", ["fake", "smtp", "resend"], "fake");
+}

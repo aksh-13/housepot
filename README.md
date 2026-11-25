@@ -103,7 +103,7 @@ curl -X POST -H "Authorization: Bearer dev-tick-secret" http://localhost:3000/ap
 ### Tests and checks
 
 ```sh
-pnpm test        # 324 tests against a real Postgres (pnpm db:up starts it)
+pnpm test        # 331 tests against a real Postgres (pnpm db:up starts it)
 pnpm lint        # Biome: lint and formatting
 pnpm typecheck
 pnpm build
@@ -215,7 +215,7 @@ The app never holds money in this setup, so it needs no payment account. It has 
 2. **Production settings.** These four matter for safety; the production overlay in `k8s/overlays/prod` already sets them.
    - `CARD_HOUSES=off`: nobody can start a card house, and the pretend checkout and the payments webhook are closed. Without it, the pretend payment provider would let anyone credit a balance.
    - `INBOUND_EMAIL_PROVIDER=off`: no pretend Interac pages. People mark debts with "I sent it" and "It arrived".
-   - `SIGN_IN=email` with `EMAIL_PROVIDER=smtp` or `resend`, never `fake`: with a fake sender, `/dev/outbox` shows everyone's sign-in codes.
+   - `SIGN_IN=email` with `EMAIL_PROVIDER=smtp` or `resend`, never `fake`: with a fake sender, `/dev/outbox` shows everyone's sign-in codes. In production the app refuses to start sending if `EMAIL_PROVIDER` is not set at all.
    - `TICK_SECRET`: a long random string.
 3. **An email sender.**
    - No domain yet: `EMAIL_PROVIDER=smtp` with a Gmail account and an app password (`SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=465`). The host must allow outgoing SMTP; Railway's Hobby plan does not.

@@ -33,7 +33,7 @@ export type BillView = {
   createdByName: string;
   createdAt: Date;
   edited: boolean;
-  /** True once a settle-up has happened since the bill was added: it is part of those debts now. */
+  /** True once a settle-up has swept the bill up: it is part of those debts now. */
   locked: boolean;
   /** In rotation order. */
   shares: { memberId: string; name: string; ownCents: number | null; shareCents: number }[];
@@ -141,15 +141,21 @@ export async function createBill(db: Db, a: CreateArgs): Promise<{ ok: true; bil
     if (!(await activeMembers(t, a.houseId)).some((m) => m.id === a.actorMemberId)) {
       return fail("Only housemates can add bills.");
     }
-    if (a.clientToken) {
-      const seen = await t.query<{ id: string }>(
-        "select id from bills where client_token = $1 and house_id = $2",
-        [a.clientToken, a.houseId],
-      );
-      if (seen.rows[0]) return { ok: true as const, billId: seen.rows[0].id };
-    }
     const checked = await check(t, a.houseId, a.input);
     if (!checked.ok) return checked;
+    // A double tap sends the same form twice: answer with the bill it already made. If the token
+    // comes back with a different bill (the form was reopened with Back and changed), that is a
+    // new bill and must not be dropped, so it is saved without the token.
+    let clientToken = a.clientToken ?? null;
+    if (clientToken) {
+      const seen = await t.query<{ id: string; same: boolean }>(
+        `select id, (description = $3 and total_cents = $4 and paid_by_member_id = $5) as same
+         from bills where house_id = $1 and client_token = $2`,
+        [a.houseId, clientToken, checked.description, a.input.totalCents, a.input.paidByMemberId],
+      );
+      if (seen.rows[0]?.same) return { ok: true as const, billId: seen.rows[0].id };
+      if (seen.rows[0]) clientToken = null;
+    }
     const inserted = await t.query<{ id: string }>(
       `insert into bills (house_id, description, total_cents, subtotal_cents, paid_by_member_id,
          created_by_member_id, client_token, created_at, updated_at)
@@ -161,7 +167,7 @@ export async function createBill(db: Db, a: CreateArgs): Promise<{ ok: true; bil
         checked.subtotalCents,
         a.input.paidByMemberId,
         a.actorMemberId,
-        a.clientToken ?? null,
+        clientToken,
         a.now,
       ],
     );
@@ -203,7 +209,7 @@ async function changeable(
   const { rows } = await t.query<Row>(
     `select b.id, b.house_id as "houseId", b.paid_by_member_id as "payerId", b.revision, b.description,
             b.total_cents as "totalCents",
-            (h.last_settled_at is not null and b.created_at <= h.last_settled_at) as locked
+            b.settled_at is not null as locked
      from bills b join houses h on h.id = b.house_id
      where b.id = $1 and b.deleted_at is null`,
     [billId],
@@ -275,7 +281,7 @@ const VIEW = `
          b.subtotal_cents as "subtotalCents", b.paid_by_member_id as "paidByMemberId",
          coalesce(pu.name, 'Housemate') as "paidByName", coalesce(cu.name, 'Housemate') as "createdByName",
          b.created_at as "createdAt", b.revision > 1 as edited,
-         (h.last_settled_at is not null and b.created_at <= h.last_settled_at) as locked,
+         b.settled_at is not null as locked,
          coalesce((
            select json_agg(json_build_object('memberId', s.member_id, 'name', coalesce(su.name, 'Housemate'),
                     'ownCents', s.own_cents, 'shareCents', s.share_cents) order by sm.rotation_position)

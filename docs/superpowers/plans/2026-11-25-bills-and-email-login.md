@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-25-bills-and-email-login-design.md`. Read it, and `docs/superpowers/specs/2026-11-14-housepot-design.md` for the ledger.
 
+> **Changed after the final review:** a bill is locked by `bills.settled_at`, stamped by the settle-up under the house lock, not by comparing `created_at` with `houses.last_settled_at` (that column was dropped). The form token is unique per house, and a token reused for a different bill adds the new bill. Where Tasks 2 and 4 below say otherwise, the code is right.
+
 ## Global Constraints
 
 - Money is whole cents in integers everywhere. Never floats for stored or compared amounts.

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { cardHousesOn, emailProvider, inboundMode, signInBy } from "@/settings";
 
-const NAMES = ["CARD_HOUSES", "INBOUND_EMAIL_PROVIDER", "SIGN_IN", "EMAIL_PROVIDER"];
+const NAMES = ["CARD_HOUSES", "INBOUND_EMAIL_PROVIDER", "SIGN_IN", "EMAIL_PROVIDER", "NODE_ENV"];
 let saved: Record<string, string | undefined>;
 
 beforeEach(() => {
@@ -59,4 +59,15 @@ test("a typo in a setting is an error that names the setting, never a silent def
   expect(() => signInBy()).toThrow(/SIGN_IN must be one of phone, email/);
   process.env.EMAIL_PROVIDER = "offf";
   expect(() => emailProvider()).toThrow(/EMAIL_PROVIDER must be one of fake, smtp, resend/);
+});
+
+// With the fake sender, /dev/outbox shows every sign-in code. In production that must be a choice
+// someone wrote down, never what happens when a variable is forgotten.
+test("in production the email sender has no default", () => {
+  (process.env as Record<string, string>).NODE_ENV = "production";
+  expect(() => emailProvider()).toThrow(/EMAIL_PROVIDER must be set in production/);
+  process.env.EMAIL_PROVIDER = "fake";
+  expect(emailProvider()).toBe("fake");
+  process.env.EMAIL_PROVIDER = "resend";
+  expect(emailProvider()).toBe("resend");
 });

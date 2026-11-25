@@ -27,6 +27,7 @@ import {
   markDebtSent,
   settleUpHouse,
   textDebtPaid,
+  textDebtSent,
   textNewDebts,
 } from "@/domain/settleup";
 import { claimBounty, markDone, payToSkip } from "@/domain/turns";
@@ -459,12 +460,7 @@ export async function debtSentAction(fd: FormData): Promise<void> {
   const user = await requireUser("/settle");
   const sent = await markDebtSent(getDb(), { debtId: str(fd, "debtId"), userId: user.id, now: new Date() });
   if (!sent.ok) back("/settle", "error", sent.error);
-  await getProviders()
-    .sms.send(
-      sent.debt.toContact,
-      `${sent.debt.fromName} says they sent you ${formatCents(sent.debt.amountCents)} by e-Transfer. It is marked paid as soon as Interac's email reaches Housepot, or tap Received: ${await baseUrl()}/settle`,
-    )
-    .catch((err) => console.error("Sent text failed:", err));
+  await textDebtSent(getProviders().sms, sent.debt, `${await baseUrl()}/settle`);
   back("/settle", "notice", `Marked as sent. ${sent.debt.toName} will confirm when it lands.`);
 }
 
