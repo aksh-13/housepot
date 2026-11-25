@@ -2,7 +2,7 @@ import type { Db } from "@/db";
 import { logActivity } from "./activity";
 import { activeMembers, getHouse } from "./houses";
 import { transfer } from "./ledger";
-import { type Share, splitBill } from "./split";
+import { parseDollars, type Share, splitBill } from "./split";
 
 /**
  * Shared bills: groceries, internet, a restaurant receipt. One housemate paid; the others owe them
@@ -299,4 +299,36 @@ export async function houseBills(db: Db, houseId: string, limit = 50): Promise<B
 export async function billById(db: Db, billId: string): Promise<BillView | null> {
   const { rows } = await db.query<BillView>(`${VIEW} and b.id::text = $1`, [billId]);
   return rows[0] ?? null;
+}
+
+/**
+ * The add and edit forms, read into a bill. Field names: description, total, paidBy, split
+ * ("equal" or "receipt"), sharer (one per ticked person), subtotal, and own:<memberId> for each
+ * person's own items. Only checks that the money parses; createBill and editBill check the rest.
+ */
+export function billInputFromForm(fd: FormData): { ok: true; input: BillInput } | Fail {
+  const text = (key: string) => String(fd.get(key) ?? "").trim();
+  const totalCents = parseDollars(text("total"));
+  if (totalCents === null) return fail("The total is not an amount of money.");
+  const sharerMemberIds = fd.getAll("sharer").map(String);
+  const input: BillInput = {
+    description: text("description"),
+    totalCents,
+    paidByMemberId: text("paidBy"),
+    sharerMemberIds,
+  };
+  if (text("split") !== "receipt") return { ok: true, input };
+
+  const subtotalCents = parseDollars(text("subtotal"));
+  if (subtotalCents === null) return fail("The subtotal is not an amount of money.");
+  const ownCents: Record<string, number> = {};
+  // Someone unticked after their items were typed is simply not on the bill.
+  for (const id of sharerMemberIds) {
+    const typed = text(`own:${id}`);
+    if (!typed) continue;
+    const cents = parseDollars(typed);
+    if (cents === null) return fail("One of the item amounts is not an amount of money.");
+    ownCents[id] = cents;
+  }
+  return { ok: true, input: { ...input, receipt: { subtotalCents, ownCents } } };
 }

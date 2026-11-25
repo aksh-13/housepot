@@ -3,6 +3,7 @@
 import { notFound, redirect } from "next/navigation";
 import { getDb } from "@/db";
 import { endSession, normalizePhone, requestCode, setUserName, verifyCode } from "@/domain/auth";
+import { billInputFromForm, createBill, deleteBill, editBill } from "@/domain/bills";
 import { createChore, ensureTurns, updateChore } from "@/domain/chores";
 import { raiseDispute, voteDispute } from "@/domain/disputes";
 import { fakeReceivedEmail, fakeRequestEmail } from "@/domain/fakeInterac";
@@ -388,6 +389,57 @@ export async function leaveAction(): Promise<void> {
     );
   }
   redirect("/?notice=You%20left%20the%20house%20and%20were%20cashed%20out.");
+}
+
+// ── Bills ─────────────────────────────────────────────────────────────────────
+
+/** Bills only exist in houses that settle up by e-Transfer. */
+async function requireBillsHouse(next: string) {
+  const session = await requireMember(next);
+  if (session.house.moneyMode !== "etransfer") notFound();
+  return session;
+}
+
+export async function addBillAction(fd: FormData): Promise<void> {
+  const { member, house } = await requireBillsHouse("/bills/new");
+  const parsed = billInputFromForm(fd);
+  if (!parsed.ok) back("/bills/new", "error", parsed.error);
+  const added = await createBill(getDb(), {
+    houseId: house.id,
+    actorMemberId: member.id,
+    input: parsed.input,
+    clientToken: str(fd, "token") || undefined,
+    now: new Date(),
+  });
+  if (!added.ok) back("/bills/new", "error", added.error);
+  back("/bills", "notice", "Bill added.");
+}
+
+export async function editBillAction(fd: FormData): Promise<void> {
+  const billId = str(fd, "billId");
+  const path = `/bills/${encodeURIComponent(billId)}`;
+  const { member } = await requireBillsHouse(path);
+  const parsed = billInputFromForm(fd);
+  if (!parsed.ok) back(path, "error", parsed.error);
+  const edited = await editBill(getDb(), {
+    billId,
+    actorMemberId: member.id,
+    input: parsed.input,
+    now: new Date(),
+  });
+  if (!edited.ok) back(path, "error", edited.error);
+  back("/bills", "notice", "Bill updated.");
+}
+
+export async function deleteBillAction(fd: FormData): Promise<void> {
+  const { member } = await requireBillsHouse("/bills");
+  const deleted = await deleteBill(getDb(), {
+    billId: str(fd, "billId"),
+    actorMemberId: member.id,
+    now: new Date(),
+  });
+  if (!deleted.ok) back("/bills", "error", deleted.error);
+  back("/bills", "notice", "Bill deleted.");
 }
 
 // ── Settling up by e-Transfer ─────────────────────────────────────────────────

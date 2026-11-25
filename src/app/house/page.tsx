@@ -62,6 +62,12 @@ function describe(item: ActivityItem, meId: string): { text: string; cents?: num
       return { text: `${who} cashed out` };
     case "settled":
       return { text: "The pot was cashed out and restarted" };
+    case "bill_added":
+      return { text: `${who} added ${item.data.description} (${formatCents(Number(item.data.totalCents))})` };
+    case "bill_edited":
+      return { text: `${who} changed ${item.data.description}` };
+    case "bill_deleted":
+      return { text: `${who} deleted ${item.data.description}` };
     case "settled_up": {
       const n = Number(item.data.payments ?? 0);
       return {
@@ -130,6 +136,13 @@ export default async function HousePage({ searchParams }: Props) {
       <Masthead current="house" settle={etransfer} />
       <Flash params={await searchParams} />
       <h1 className="house-name">{house.name}</h1>
+      {etransfer && isActive && (
+        <p style={{ marginTop: "var(--space-4)" }}>
+          <Link href="/bills/new" className="btn btn-primary btn-block">
+            Add a bill
+          </Link>
+        </p>
+      )}
 
       {iOwe.length > 0 && (
         <section className="callout">

@@ -694,6 +694,18 @@ details.editor .body {
   line-height: 1.6;
 }
 
+/* The live "each person pays" preview sits between the bill form's fields and its button. */
+form > .receipt {
+  margin-bottom: var(--space-5);
+}
+
+/* A person's own items on a receipt: a short money box at the end of their row. */
+.input.own-items {
+  width: 7rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 .steps {
   counter-reset: step;
 }

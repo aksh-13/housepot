@@ -1,6 +1,14 @@
 import { beforeEach, expect, test } from "vitest";
 import { recentActivity } from "@/domain/activity";
-import { type BillInput, billById, createBill, deleteBill, editBill, houseBills } from "@/domain/bills";
+import {
+  type BillInput,
+  billById,
+  billInputFromForm,
+  createBill,
+  deleteBill,
+  editBill,
+  houseBills,
+} from "@/domain/bills";
 import { memberBalance } from "@/domain/ledger";
 import { settleUpHouse } from "@/domain/settleup";
 import { db, makeHouse, resetDb, type TestHouse } from "./helpers";
@@ -297,4 +305,94 @@ test("a bill that does not exist, or belongs to another house, cannot be edited 
   expect(await deleteBill(db, { billId: unknown, actorMemberId: ana, now: LATER })).toEqual(missing);
   expect(await deleteBill(db, { billId: "not-an-id", actorMemberId: ana, now: LATER })).toEqual(missing);
   expect(await balances()).toEqual([6000, -3000, -3000]);
+});
+
+function form(fields: Record<string, string | string[]>): FormData {
+  const fd = new FormData();
+  for (const [key, value] of Object.entries(fields)) {
+    for (const v of [value].flat()) fd.append(key, v);
+  }
+  return fd;
+}
+
+test("an equal form becomes a bill input", () => {
+  const fd = form({
+    description: "Groceries",
+    total: "56.50",
+    paidBy: "a",
+    split: "equal",
+    sharer: ["a", "b"],
+  });
+  expect(billInputFromForm(fd)).toEqual({
+    ok: true,
+    input: { description: "Groceries", totalCents: 5650, paidByMemberId: "a", sharerMemberIds: ["a", "b"] },
+  });
+});
+
+test("a receipt form carries the subtotal and only the items that were typed", () => {
+  const fd = form({
+    description: "Dinner",
+    total: "$56.50",
+    paidBy: "a",
+    split: "receipt",
+    sharer: ["a", "b"],
+    subtotal: "50",
+    "own:a": "30",
+    "own:b": "",
+  });
+  expect(billInputFromForm(fd)).toEqual({
+    ok: true,
+    input: {
+      description: "Dinner",
+      totalCents: 5650,
+      paidByMemberId: "a",
+      sharerMemberIds: ["a", "b"],
+      receipt: { subtotalCents: 5000, ownCents: { a: 3000 } },
+    },
+  });
+});
+
+test("items typed for someone who was then unticked are dropped", () => {
+  const fd = form({
+    description: "Dinner",
+    total: "56.50",
+    paidBy: "a",
+    split: "receipt",
+    sharer: ["a", "b"],
+    subtotal: "50",
+    "own:a": "30",
+    "own:c": "20",
+  });
+  const r = billInputFromForm(fd);
+  expect(r.ok && r.input.receipt?.ownCents).toEqual({ a: 3000 });
+});
+
+test("subtotal and own amounts are ignored when the split is equal", () => {
+  const fd = form({
+    description: "Groceries",
+    total: "56.50",
+    paidBy: "a",
+    split: "equal",
+    sharer: ["a", "b"],
+    subtotal: "nonsense",
+    "own:a": "30",
+  });
+  const r = billInputFromForm(fd);
+  expect(r.ok && r.input.receipt).toBeUndefined();
+});
+
+test("money that does not parse is refused with the field named", () => {
+  const ok = { description: "Dinner", total: "56.50", paidBy: "a", split: "receipt", sharer: ["a", "b"] };
+  expect(billInputFromForm(form({ ...ok, total: "abc", subtotal: "50" }))).toEqual({
+    ok: false,
+    error: "The total is not an amount of money.",
+  });
+  expect(billInputFromForm(form({ ...ok, subtotal: "x" }))).toEqual({
+    ok: false,
+    error: "The subtotal is not an amount of money.",
+  });
+  expect(billInputFromForm(form({ ...ok, subtotal: "50", "own:a": "1.999" }))).toEqual({
+    ok: false,
+    error: "One of the item amounts is not an amount of money.",
+  });
 });
