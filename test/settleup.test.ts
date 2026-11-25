@@ -2,6 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, test } from "vitest";
+import { createBill } from "@/domain/bills";
 import { createChore, ensureTurns } from "@/domain/chores";
 import { getHouse, joinHouse } from "@/domain/houses";
 import { choreBounty, memberBalance } from "@/domain/ledger";
@@ -9,6 +10,7 @@ import { savePhoto } from "@/domain/photos";
 import { leaveHouse, voteClosePot } from "@/domain/settlement";
 import {
   debtsForUser,
+  houseSquareUp,
   markDebtPaid,
   markDebtSent,
   minimalPayments,
@@ -343,4 +345,48 @@ test("settling up records when it happened, so earlier bills can be locked", asy
   expect((await db.query("select last_settled_at from houses")).rows[0].last_settled_at).toBeNull();
   await settleUpHouse(db, { houseId: house.houseId, now: DEC_1, reason: "scheduled" });
   expect((await db.query("select last_settled_at from houses")).rows[0].last_settled_at).toEqual(DEC_1);
+});
+
+describe("houseSquareUp", () => {
+  const bill = async (paidBy: string, totalCents: number) => {
+    const r = await createBill(db, {
+      houseId: house.houseId,
+      actorMemberId: paidBy,
+      input: { description: "Bill", totalCents, paidByMemberId: paidBy, sharerMemberIds: [a, b, c] },
+      now: NOW,
+    });
+    if (!r.ok) throw new Error(r.error);
+  };
+
+  test("turns bills into the fewest payments", async () => {
+    await bill(a, 9000);
+    await bill(b, 3000);
+    expect(await balances()).toEqual([5000, -1000, -4000]);
+    expect(await houseSquareUp(db, house.houseId)).toEqual({
+      lines: [
+        { fromMemberId: c, toMemberId: a, amountCents: 4000, fromName: "Cy", toName: "Ana" },
+        { fromMemberId: b, toMemberId: a, amountCents: 1000, fromName: "Ben", toName: "Ana" },
+      ],
+      unclaimedCents: 0,
+    });
+  });
+
+  test("creates no debts and moves no money", async () => {
+    await bill(a, 9000);
+    const before = await balances();
+    await houseSquareUp(db, house.houseId);
+    expect(await debts()).toEqual([]);
+    expect(await balances()).toEqual(before);
+  });
+
+  test("reports money still waiting on a chore", async () => {
+    const turn = await waitingTurn();
+    await payToSkip(db, { turnId: turn.id, memberId: a, now: NOW });
+    expect(await houseSquareUp(db, house.houseId)).toEqual({ lines: [], unclaimedCents: 500 });
+    expect(await balances()).toEqual([-500, 0, 0]);
+  });
+
+  test("of an even house is empty", async () => {
+    expect(await houseSquareUp(db, house.houseId)).toEqual({ lines: [], unclaimedCents: 0 });
+  });
 });

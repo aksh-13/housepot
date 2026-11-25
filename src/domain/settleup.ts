@@ -47,6 +47,44 @@ export function minimalPayments(balances: { memberId: string; cents: number }[])
   return payments;
 }
 
+export type SquareUpLine = Payment & { fromName: string; toName: string };
+
+/**
+ * The fewest payments that would square the house up right now, for showing on the home screen.
+ * It creates nothing and moves nothing: real debts are only made by a settle-up.
+ *
+ * Money waiting on a chore nobody has claimed belongs to no one yet, so it is reported separately
+ * and the payments can add up to a little less than what people are down.
+ */
+export async function houseSquareUp(
+  db: Db,
+  houseId: string,
+): Promise<{ lines: SquareUpLine[]; unclaimedCents: number }> {
+  const [balances, unclaimed] = await Promise.all([
+    db.query<{ memberId: string; name: string; cents: number }>(
+      `select m.id as "memberId", coalesce(u.name, 'Housemate') as name,
+              coalesce(sum(le.amount_cents), 0)::int as cents
+       from members m join users u on u.id = m.user_id
+       left join ledger_entries le on le.member_id = m.id
+       where m.house_id = $1 and m.status <> 'left'
+       group by m.id, u.name`,
+      [houseId],
+    ),
+    db.query<{ cents: number }>(
+      `select coalesce(sum(amount_cents), 0)::int as cents from ledger_entries
+       where house_id = $1 and chore_id is not null`,
+      [houseId],
+    ),
+  ]);
+  const name = new Map(balances.rows.map((b) => [b.memberId, b.name]));
+  const lines = minimalPayments(balances.rows).map((p) => ({
+    ...p,
+    fromName: name.get(p.fromMemberId) ?? "Housemate",
+    toName: name.get(p.toMemberId) ?? "Housemate",
+  }));
+  return { lines, unclaimedCents: unclaimed.rows[0].cents };
+}
+
 const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 
 /** "HP-7K3Q": short, typed into an e-Transfer message, no look-alike letters. */

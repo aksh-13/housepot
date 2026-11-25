@@ -7,7 +7,7 @@ import { type ActivityItem, recentActivity } from "@/domain/activity";
 import { listChores } from "@/domain/chores";
 import { openDisputes } from "@/domain/disputes";
 import { houseBalances } from "@/domain/ledger";
-import { debtsForUser } from "@/domain/settleup";
+import { debtsForUser, houseSquareUp } from "@/domain/settleup";
 import { disputableTurnIds, houseTurns, type TurnView } from "@/domain/views";
 import { requireMember } from "@/lib/current";
 import { ago, dateLabel, dueLabel, signedCents } from "@/lib/format";
@@ -98,7 +98,7 @@ export default async function HousePage({ searchParams }: Props) {
   const db = getDb();
   const now = new Date();
   const etransfer = house.moneyMode === "etransfer";
-  const [balances, turns, disputes, activity, disputable, chores, myDebts] = await Promise.all([
+  const [balances, turns, disputes, activity, disputable, chores, myDebts, squareUp] = await Promise.all([
     houseBalances(db, house.id),
     houseTurns(db, house.id),
     openDisputes(db, house.id, now),
@@ -106,7 +106,12 @@ export default async function HousePage({ searchParams }: Props) {
     disputableTurnIds(db, house.id, member.id, now),
     listChores(db, house.id),
     etransfer ? debtsForUser(db, user.id) : Promise.resolve([]),
+    etransfer ? houseSquareUp(db, house.id) : Promise.resolve({ lines: [], unclaimedCents: 0 }),
   ]);
+  // The viewer's own payments first: what they pay, what they get, then everyone else's.
+  const involvesMe = (l: { fromMemberId: string; toMemberId: string }) =>
+    l.fromMemberId === member.id || l.toMemberId === member.id;
+  const squareLines = [...squareUp.lines].sort((x, y) => Number(involvesMe(y)) - Number(involvesMe(x)));
   const iOwe = myDebts.filter((d) => d.status !== "paid" && d.fromUserId === user.id);
   const owedToMe = myDebts.filter((d) => d.status !== "paid" && d.toUserId === user.id);
   const overdue = iOwe.some((d) => d.dueAt.getTime() < now.getTime());
@@ -317,6 +322,43 @@ export default async function HousePage({ searchParams }: Props) {
               <span className="small muted">{dueLabel(turn.dueAt, now, house.tz)}</span>
             </div>
           ))}
+        </section>
+      )}
+
+      {etransfer && (
+        <section className="section">
+          <h2 className="label">To square up</h2>
+          {squareLines.length === 0 ? (
+            <p className="empty">Everyone is square.</p>
+          ) : (
+            squareLines.map((l) => (
+              <div key={`${l.fromMemberId}-${l.toMemberId}`} className="row">
+                <span>
+                  {l.fromMemberId === member.id
+                    ? `You pay ${l.toName}`
+                    : l.toMemberId === member.id
+                      ? `${l.fromName} pays you`
+                      : `${l.fromName} pays ${l.toName}`}
+                </span>
+                <span className="leader" />
+                <span
+                  className={`amt ${l.fromMemberId === member.id ? "loss" : l.toMemberId === member.id ? "gain" : ""}`}
+                >
+                  {formatCents(l.amountCents)}
+                </span>
+              </div>
+            ))
+          )}
+          {squareUp.unclaimedCents > 0 && (
+            <p className="small muted" style={{ marginTop: "var(--space-3)" }}>
+              {formatCents(squareUp.unclaimedCents)} is waiting on unclaimed chores and is not counted here.
+            </p>
+          )}
+          {squareLines.length > 0 && (
+            <p className="small muted" style={{ marginTop: "var(--space-3)" }}>
+              These become real payments at the next settle-up on {dateLabel(house.settlementDate)}.
+            </p>
+          )}
         </section>
       )}
 
