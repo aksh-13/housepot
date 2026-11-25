@@ -175,18 +175,19 @@ All rules live in `src/domain` and are tested without the web layer. If you chan
 
 ## Settings
 
-| Variable                 | What it is                                                                                                                       |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`           | Postgres connection string.                                                                                                      |
-| `BASE_URL`               | Public address of the site. Used in text-message links and payment return pages.                                                 |
-| `TICK_SECRET`            | Shared secret the scheduler sends to `/api/internal/tick`.                                                                       |
-| `SMS_PROVIDER`           | `fake` or `twilio`. With `twilio`: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`.                                     |
-| `PAYMENTS_PROVIDER`      | `fake` or `stripe`. With `stripe`: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`.                                                 |
-| `STORAGE_PROVIDER`       | `disk` or `s3`. With `s3`: `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`.                  |
-| `OPERATOR_PHONES`        | Comma-separated phone numbers allowed to open `/operator`, the list of e-Transfers to send.                                      |
-| `INBOUND_EMAIL_PROVIDER` | `fake` (adds `/dev/inbox` and the pretend bank page) or `webhook` (real forwarded emails only). Must be `webhook` in production. |
-| `INBOUND_EMAIL_DOMAIN`   | The domain of the forwarding addresses, `pay-…@this-domain`.                                                                     |
-| `INBOUND_EMAIL_SECRET`   | Shared secret the mail receiver sends to `/api/webhooks/email`.                                                                  |
+| Variable                 | What it is                                                                                                                                                                                |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`           | Postgres connection string.                                                                                                                                                               |
+| `BASE_URL`               | Public address of the site. Used in text-message links and payment return pages.                                                                                                          |
+| `TICK_SECRET`            | Shared secret the scheduler sends to `/api/internal/tick`.                                                                                                                                |
+| `SMS_PROVIDER`           | `fake` or `twilio`. With `twilio`: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`.                                                                                              |
+| `PAYMENTS_PROVIDER`      | `fake` or `stripe`. With `stripe`: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`.                                                                                                          |
+| `STORAGE_PROVIDER`       | `disk` or `s3`. With `s3`: `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`.                                                                           |
+| `OPERATOR_PHONES`        | Comma-separated phone numbers allowed to open `/operator`, the list of e-Transfers to send.                                                                                               |
+| `INBOUND_EMAIL_PROVIDER` | `fake` (adds `/dev/inbox` and the pretend bank page), `webhook` (real forwarded emails only) or `off` (no checking; people use "I sent it" and "It arrived"). Never `fake` in production. |
+| `CARD_HOUSES`            | `on` or `off`. `off` means e-Transfer houses only, and closes the pretend checkout and the payments webhook. Set `off` in production until Stripe is set up.                              |
+| `INBOUND_EMAIL_DOMAIN`   | The domain of the forwarding addresses, `pay-…@this-domain`.                                                                                                                              |
+| `INBOUND_EMAIL_SECRET`   | Shared secret the mail receiver sends to `/api/webhooks/email`.                                                                                                                           |
 
 ## Going live
 

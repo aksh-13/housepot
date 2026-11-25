@@ -41,6 +41,7 @@ import { isOperator } from "@/lib/operator";
 import { safeNext } from "@/lib/session";
 import { formatCents } from "@/money";
 import { getProviders, inboundIsFake, paymentsAreFake } from "@/providers";
+import { cardHousesOn } from "@/settings";
 import type { Schedule } from "@/time";
 
 const str = (fd: FormData, key: string) => String(fd.get(key) ?? "").trim();
@@ -121,6 +122,7 @@ export async function joinHouseAction(fd: FormData): Promise<void> {
 // ── Paying in ─────────────────────────────────────────────────────────────────
 
 export async function payAction(fd: FormData): Promise<void> {
+  if (!cardHousesOn()) notFound();
   const { member } = await requireMember();
   const saveCard = fd.get("saveCard") === "on";
   if (saveCard) await setAutoReload(getDb(), member.id, true);
@@ -135,7 +137,7 @@ export async function payAction(fd: FormData): Promise<void> {
 
 /** The "Pay" button on the pretend checkout page. Only exists while payments are fake. */
 export async function fakePayAction(fd: FormData): Promise<void> {
-  if (!paymentsAreFake()) notFound();
+  if (!paymentsAreFake() || !cardHousesOn()) notFound();
   let payload: { event: unknown; successUrl?: string };
   try {
     payload = JSON.parse(Buffer.from(str(fd, "p"), "base64url").toString());

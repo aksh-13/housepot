@@ -2,6 +2,7 @@ import { randomInt } from "node:crypto";
 import type { Db } from "@/db";
 import { formatCents } from "@/money";
 import type { Sms } from "@/providers/sms";
+import { inboundMode } from "@/settings";
 import { nextMonthStart } from "@/time";
 import { logActivity } from "./activity";
 import { activeMembers, getHouse } from "./houses";
@@ -320,9 +321,11 @@ export async function textNewDebts(db: Db, sms: Sms, debts: CreatedDebt[], link:
     await send(
       sms,
       d.toPhone,
-      d.toEmail
-        ? `Housepot settle-up: ${d.fromName} owes you ${amount}. Send them an Interac request to make it one tap: ${link}`
-        : `Housepot settle-up: ${d.fromName} owes you ${amount}. Add your e-Transfer email so they can pay you: ${link}`,
+      inboundMode() === "off"
+        ? `Housepot settle-up: ${d.fromName} owes you ${amount}. ${link}`
+        : d.toEmail
+          ? `Housepot settle-up: ${d.fromName} owes you ${amount}. Send them an Interac request to make it one tap: ${link}`
+          : `Housepot settle-up: ${d.fromName} owes you ${amount}. Add your e-Transfer email so they can pay you: ${link}`,
     );
   }
 }

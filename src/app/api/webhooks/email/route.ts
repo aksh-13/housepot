@@ -3,6 +3,7 @@ import { getDb } from "@/db";
 import { handleInboundEmail, type InboundEmail } from "@/domain/inbound";
 import { textDebtPaid } from "@/domain/settleup";
 import { getProviders } from "@/providers";
+import { inboundMode } from "@/settings";
 
 export const dynamic = "force-dynamic";
 
@@ -46,6 +47,7 @@ function parse(body: unknown): InboundEmail | null {
  * service's own DKIM check for the sender's domain. See README, "Checking payments automatically".
  */
 export async function POST(req: Request): Promise<Response> {
+  if (inboundMode() === "off") return new Response("not found", { status: 404 });
   if (!authorised(req)) return new Response("unauthorised", { status: 401 });
   let body: unknown;
   try {

@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { Db } from "@/db";
+import { cardHousesOn } from "@/settings";
 import { nextMonthStart, nextTermEnd } from "@/time";
 import { logActivity } from "./activity";
 import { transfer } from "./ledger";
@@ -135,6 +136,7 @@ export async function createHouse(
   const depositCents = a.depositCents ?? DEFAULT_DEPOSIT_CENTS;
   const moneyMode = a.moneyMode ?? "card";
   if (moneyMode !== "card" && moneyMode !== "etransfer") return { ok: false, error: "Pick how money works." };
+  if (moneyMode === "card" && !cardHousesOn()) return { ok: false, error: "Card houses are switched off." };
   if (!name) return { ok: false, error: "Give the house a name." };
   if (
     !Number.isInteger(depositCents) ||

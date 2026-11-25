@@ -15,6 +15,7 @@ import {
   newDebtCode,
   PAY_WITHIN_MS,
   settleUpHouse,
+  textNewDebts,
 } from "@/domain/settleup";
 import { runTick } from "@/domain/tick";
 import { claimBounty, missTurn, payToSkip } from "@/domain/turns";
@@ -321,4 +322,19 @@ test("someone who joins an e-Transfer house later is active straight away", asyn
   expect(joined.ok).toBe(true);
   const { rows } = await db.query("select status from members where user_id = $1", [userId]);
   expect(rows[0].status).toBe("active");
+});
+
+test("with Interac checking off, the settle-up text does not mention an Interac request", async () => {
+  await aSkipsBClaims();
+  await db.query("update members set etransfer_email = 'ben@example.com' where id = $1", [b]);
+  await db.query("delete from sms_outbox");
+  process.env.INBOUND_EMAIL_PROVIDER = "off";
+  try {
+    const created = await settleUpHouse(db, { houseId: house.houseId, now: DEC_1, reason: "scheduled" });
+    await textNewDebts(db, sms, created, "https://housepot.test/settle");
+  } finally {
+    delete process.env.INBOUND_EMAIL_PROVIDER;
+  }
+  const toBen = (await texts()).filter((t) => t.to_phone === house.members[1].phone).map((t) => t.body);
+  expect(toBen).toEqual(["Housepot settle-up: Ana owes you $5. https://housepot.test/settle"]);
 });

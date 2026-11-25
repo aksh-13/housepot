@@ -1,4 +1,4 @@
-import { beforeEach, expect, test } from "vitest";
+import { afterEach, beforeEach, expect, test } from "vitest";
 import {
   activeMembers,
   createHouse,
@@ -13,6 +13,9 @@ import { db, makeUser, resetDb } from "./helpers";
 const NOW = new Date("2026-11-14T15:00:00Z");
 
 beforeEach(resetDb);
+afterEach(() => {
+  delete process.env.CARD_HOUSES;
+});
 
 test("the creator and each joiner take the next place in the rotation, all pending until they pay", async () => {
   const [u1, u2, u3] = [await makeUser("Ana"), await makeUser("Ben"), await makeUser("Cy")];
@@ -136,4 +139,27 @@ test.each([
   ["2026-12-20T03:00:00Z", "2026-12-20"],
 ])("the term end after %s is %s", (now, expected) => {
   expect(nextTermEnd(new Date(now), "America/Toronto")).toBe(expected);
+});
+
+test("a card house cannot be created when card houses are off", async () => {
+  process.env.CARD_HOUSES = "off";
+  const created = await createHouse(db, {
+    userId: await makeUser("Ana"),
+    houseName: "12 Elm",
+    moneyMode: "card",
+    now: NOW,
+  });
+  expect(created).toEqual({ ok: false, error: "Card houses are switched off." });
+  expect((await db.query("select count(*)::int as n from houses")).rows[0].n).toBe(0);
+});
+
+test("an e-Transfer house can still be created when card houses are off", async () => {
+  process.env.CARD_HOUSES = "off";
+  const created = await createHouse(db, {
+    userId: await makeUser("Ana"),
+    houseName: "12 Elm",
+    moneyMode: "etransfer",
+    now: NOW,
+  });
+  expect(created.ok).toBe(true);
 });

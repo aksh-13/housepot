@@ -1,5 +1,6 @@
 import path from "node:path";
 import { getDb } from "@/db";
+import { inboundMode } from "@/settings";
 import { fakePayments, type Payments, stripePayments } from "./payments";
 import { fakeSms, type Sms, twilioSms } from "./sms";
 import { diskStorage, type Storage, s3Storage } from "./storage";
@@ -26,12 +27,9 @@ export const paymentsAreFake = () => (process.env.PAYMENTS_PROVIDER ?? "fake") =
  * fake: the development inbox (/dev/inbox) and pretend Interac page exist, so the whole settle-up
  * flow can be tried with no email set up. webhook: only real emails, through /api/webhooks/email.
  */
-export function inboundIsFake(): boolean {
-  const kind = process.env.INBOUND_EMAIL_PROVIDER ?? "fake";
-  // A typo must never quietly leave the pretend Interac pages switched on: anyone could mark debts paid.
-  oneOf("INBOUND_EMAIL_PROVIDER", kind, ["fake", "webhook"]);
-  return kind === "fake";
-}
+export const inboundIsFake = (): boolean => inboundMode() === "fake";
+/** No Interac emails are read at all: debts are marked by hand with "I sent it" and "It arrived". */
+export const inboundIsOff = (): boolean => inboundMode() === "off";
 
 /**
  * The outside services, chosen by environment variables. With nothing set, everything is fake:
