@@ -316,6 +316,7 @@ export async function addChoreAction(fd: FormData): Promise<void> {
     schedule: scheduleFrom(fd),
     deadlineTime: str(fd, "deadlineTime"),
     skipPriceCents: dollarsToCents(str(fd, "skipPrice") || "5"),
+    firstMemberId: str(fd, "firstMemberId") || undefined,
     now,
   });
   if (!created.ok) back("/house/chores", "error", created.error);

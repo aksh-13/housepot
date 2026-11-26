@@ -3,8 +3,10 @@ import { ScheduleFields, SubmitButton } from "@/components/buttons";
 import { Flash, Masthead } from "@/components/frame";
 import { getDb } from "@/db";
 import { type Chore, listChores } from "@/domain/chores";
+import { activeMembers } from "@/domain/houses";
+import { houseTurns } from "@/domain/views";
 import { requireMember } from "@/lib/current";
-import { scheduleLabel, timeLabel } from "@/lib/format";
+import { dueLabel, scheduleLabel, timeLabel } from "@/lib/format";
 import { formatCents } from "@/money";
 import { localDate } from "@/time";
 
@@ -104,9 +106,17 @@ function ChoreFields({ chore, today, idPrefix }: { chore?: Chore; today: string;
 }
 
 export default async function ChoresPage({ searchParams }: Props) {
-  const { house } = await requireMember("/house/chores");
-  const chores = await listChores(getDb(), house.id);
-  const today = localDate(new Date(), house.tz);
+  const { member, house } = await requireMember("/house/chores");
+  const db = getDb();
+  const now = new Date();
+  const [chores, housemates, turns] = await Promise.all([
+    listChores(db, house.id),
+    activeMembers(db, house.id),
+    houseTurns(db, house.id),
+  ]);
+  const today = localDate(now, house.tz);
+  // Whose turn each chore is right now, so the list answers "who has this one?".
+  const waiting = new Map(turns.filter((t) => t.status === "assigned").map((t) => [t.choreId, t]));
 
   return (
     <main className="shell">
@@ -126,6 +136,16 @@ export default async function ChoresPage({ searchParams }: Props) {
                 <span className="small muted">
                   {scheduleLabel(chore.schedule)}, {timeLabel(chore.deadlineTime)} ·{" "}
                   {formatCents(chore.skipPriceCents)}
+                  {waiting.has(chore.id) && (
+                    <>
+                      <br />
+                      Next:{" "}
+                      {waiting.get(chore.id)?.assigneeMemberId === member.id
+                        ? "you"
+                        : waiting.get(chore.id)?.assigneeName}
+                      , {dueLabel(waiting.get(chore.id)?.dueAt ?? now, now, house.tz)}
+                    </>
+                  )}
                 </span>
               </summary>
               <div className="body">
@@ -152,6 +172,19 @@ export default async function ChoresPage({ searchParams }: Props) {
         <h2 className="label">Add a chore</h2>
         <form action={addChoreAction}>
           <ChoreFields today={today} idPrefix="new" />
+          <div className="field">
+            <label htmlFor="new-first">Who goes first</label>
+            <select id="new-first" name="firstMemberId" className="input" defaultValue={member.id}>
+              {housemates.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.id === member.id ? "Me" : m.name}
+                </option>
+              ))}
+            </select>
+            <span className="hint">
+              You can give it to anyone. After the first turn it goes round the house in order.
+            </span>
+          </div>
           <SubmitButton className="btn btn-primary btn-block" pendingLabel="Adding…">
             Add chore
           </SubmitButton>

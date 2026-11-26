@@ -220,3 +220,71 @@ test("adding and editing a chore is written to the activity feed", async () => {
   const kinds = (await db.query("select kind from activity order by created_at, id")).rows.map((r) => r.kind);
   expect(kinds).toEqual(expect.arrayContaining(["chore_added", "chore_updated"]));
 });
+
+const nowAssigned = async () =>
+  (await db.query("select assignee_member_id from turns where status = 'assigned'")).rows[0]
+    ?.assignee_member_id;
+
+async function chore(house: TestHouse, by: number, firstMemberId?: string) {
+  return createChore(db, {
+    houseId: house.houseId,
+    memberId: house.members[by].memberId,
+    name: "Dishes",
+    schedule: THURSDAY,
+    deadlineTime: "21:00",
+    firstMemberId,
+    now: NOW,
+  });
+}
+
+test("a chore can be given to any housemate first, and then goes round the house from them", async () => {
+  const house = await makeHouse(3);
+  const [ana, ben, cy] = house.members.map((m) => m.memberId);
+  expect((await chore(house, 0, cy)).ok).toBe(true);
+
+  await ensureTurns(db, house.houseId, NOW);
+  expect(await nowAssigned()).toBe(cy);
+  await finishAssigned();
+  await ensureTurns(db, house.houseId, NOW);
+  expect(await nowAssigned()).toBe(ana);
+  await finishAssigned();
+  await ensureTurns(db, house.houseId, NOW);
+  expect(await nowAssigned()).toBe(ben);
+});
+
+test("with nobody picked, the first turn goes to whoever added the chore", async () => {
+  const house = await makeHouse(3);
+  expect((await chore(house, 1)).ok).toBe(true);
+  await ensureTurns(db, house.houseId, NOW);
+  expect(await nowAssigned()).toBe(house.members[1].memberId);
+});
+
+test("the person picked to go first must be an active housemate of this house", async () => {
+  const house = await makeHouse(2);
+  const other = await makeHouse(1);
+  const refused = { ok: false, error: "Pick a housemate to go first." };
+  expect(await chore(house, 0, other.members[0].memberId)).toEqual(refused);
+  await db.query("update members set status = 'left' where id = $1", [house.members[1].memberId]);
+  expect(await chore(house, 0, house.members[1].memberId)).toEqual(refused);
+  expect((await db.query("select count(*)::int as n from chores")).rows[0].n).toBe(0);
+});
+
+test("if the person picked leaves before the first turn, it goes to the first housemate in the rotation", async () => {
+  const house = await makeHouse(3);
+  const [ana, , cy] = house.members.map((m) => m.memberId);
+  await chore(house, 0, cy);
+  await db.query("update members set status = 'left' where id = $1", [cy]);
+  await ensureTurns(db, house.houseId, NOW);
+  expect(await nowAssigned()).toBe(ana);
+});
+
+test("the activity feed says who a new chore starts with when it is someone else", async () => {
+  const house = await makeHouse(2);
+  await chore(house, 0, house.members[1].memberId);
+  await chore(house, 0);
+  const { rows } = await db.query("select data from activity where kind = 'chore_added'");
+  // Both were added at the same moment, so the feed's order between them is not fixed.
+  const names = rows.map((r) => r.data.firstName ?? null).sort();
+  expect(rows.every((r) => r.data.name === "Dishes")).toBe(true);
+  expect(names).toEqual(["Ben", null].sort());
+});
