@@ -11,6 +11,7 @@ import {
 } from "@/app/actions";
 import { PhotoSubmit, SubmitButton } from "@/components/buttons";
 import { Flash, Masthead } from "@/components/frame";
+import { InstallHint } from "@/components/install-hint";
 import { getDb } from "@/db";
 import { type ActivityItem, recentActivity } from "@/domain/activity";
 import { listChores } from "@/domain/chores";
@@ -150,6 +151,7 @@ export default async function HousePage({ searchParams }: Props) {
       <Masthead current="house" settle={etransfer} />
       <Flash params={await searchParams} />
       <h1 className="house-name">{house.name}</h1>
+      <InstallHint />
       {etransfer && isActive && (
         <p style={{ marginTop: "var(--space-4)" }}>
           <Link href="/bills/new" className="btn btn-primary btn-block">

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { expect, test } from "vitest";
 import manifest from "@/app/manifest";
+import { installSteps } from "@/lib/install";
 
 /** Width and height from a PNG file's header. */
 function pngSize(file: string): { width: number; height: number } {
@@ -37,4 +38,22 @@ test("the manifest lists the icon sizes phones ask for, and each file is that si
 test("iPhones get their own home-screen icon and browsers get a tab icon", () => {
   expect(pngSize("src/app/apple-icon.png")).toEqual({ width: 180, height: 180 });
   expect(pngSize("src/app/icon.png")).toEqual({ width: 64, height: 64 });
+});
+
+const IPHONE =
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1";
+const ANDROID =
+  "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Mobile Safari/537.36";
+const MAC =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36";
+
+test("the home-screen hint gives each phone its own steps", () => {
+  expect(installSteps(IPHONE, false)).toBe("ios");
+  expect(installSteps(ANDROID, false)).toBe("android");
+});
+
+test("there is no hint on a computer, or once Housepot is already on the home screen", () => {
+  expect(installSteps(MAC, false)).toBeNull();
+  expect(installSteps(IPHONE, true)).toBeNull();
+  expect(installSteps(ANDROID, true)).toBeNull();
 });
