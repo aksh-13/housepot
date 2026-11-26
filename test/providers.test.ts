@@ -46,7 +46,7 @@ test("missing payment keys do not stop messages or photos", () => {
 
 test("a typo in a provider name is still refused straight away", () => {
   process.env.STORAGE_PROVIDER = "s33";
-  expect(() => getProviders()).toThrow(/STORAGE_PROVIDER must be one of disk, s3/);
+  expect(() => getProviders()).toThrow(/STORAGE_PROVIDER must be one of disk, s3, db/);
 });
 
 test("each service is built once and reused", () => {

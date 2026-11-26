@@ -4,7 +4,7 @@ import { emailProvider, inboundMode, signInBy } from "@/settings";
 import { resendEmail, smtpEmail } from "./email";
 import { fakePayments, type Payments, stripePayments } from "./payments";
 import { fakeSms, type Sms, twilioSms } from "./sms";
-import { diskStorage, type Storage, s3Storage } from "./storage";
+import { dbStorage, diskStorage, type Storage, s3Storage } from "./storage";
 
 /** `sms` carries every message the app sends: texts, or emails when people sign in by email. */
 export type Providers = { sms: Sms; payments: Payments; storage: Storage };
@@ -69,7 +69,7 @@ export function getProviders(): Providers {
   // A typo must never quietly select the fake provider: in production that would mean free deposits.
   oneOf("SMS_PROVIDER", smsKind, ["fake", "twilio", "email-fake", "email-smtp", "email-resend"]);
   oneOf("PAYMENTS_PROVIDER", paymentsKind, ["fake", "stripe"]);
-  oneOf("STORAGE_PROVIDER", storageKind, ["disk", "s3"]);
+  oneOf("STORAGE_PROVIDER", storageKind, ["disk", "s3", "db"]);
   const key = [smsKind, paymentsKind, storageKind, photoDir].join("|");
   if (cache.__housepotProviders?.key === key) return cache.__housepotProviders.providers;
 
@@ -108,7 +108,9 @@ export function getProviders(): Providers {
             S3_ACCESS_KEY_ID: need("S3_ACCESS_KEY_ID"),
             S3_SECRET_ACCESS_KEY: need("S3_SECRET_ACCESS_KEY"),
           })
-        : diskStorage(photoDir),
+        : storageKind === "db"
+          ? dbStorage(getDb())
+          : diskStorage(photoDir),
   });
   cache.__housepotProviders = { key, providers };
   return providers;
