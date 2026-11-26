@@ -30,6 +30,10 @@ In a house that settles up by e-Transfer, the same balance also tracks shared bi
 - The home screen shows the fewest payments that would square the house up right now. They become real debts at the next settle-up.
 - Any housemate can edit or delete a bill until a settle-up has happened. Every change shows in the activity feed, and nothing is erased from the ledger: an edit or delete writes opposite entries.
 
+## On a phone
+
+Housepot is a website, but it can sit on a phone's home screen like an app: on an iPhone tap Share, then "Add to Home Screen"; on Android open the browser menu and choose "Install app". It then opens full screen with its own icon. The manifest is `src/app/manifest.ts` and the icons are in `public/icons`.
+
 ## Two ways a house can handle money
 
 Each house picks one when it is created. The chore rules above are the same in both.

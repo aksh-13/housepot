@@ -22,6 +22,8 @@ ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=3000 HOSTNAME=0.0.0.0
 RUN addgroup -S -g 10001 app && adduser -S -u 10001 -G app app
 COPY --from=build --chown=10001:10001 /app/.next/standalone ./
 COPY --from=build --chown=10001:10001 /app/.next/static ./.next/static
+# The home-screen icons. The standalone build does not include the public folder by itself.
+COPY --from=build --chown=10001:10001 /app/public ./public
 COPY --from=build --chown=10001:10001 /app/migrations ./migrations
 COPY --from=build --chown=10001:10001 /app/scripts/migrate.mjs ./scripts/migrate.mjs
 USER 10001

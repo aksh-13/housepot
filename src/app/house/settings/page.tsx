@@ -245,6 +245,16 @@ export default async function SettingsPage({ searchParams }: Props) {
         )}
         <div className="setting">
           <div>
+            <h3>Put Housepot on your home screen</h3>
+            <p>
+              It opens like an app, with its own icon. iPhone: tap Share, then "Add to Home Screen". Android:
+              open the browser menu, then "Install app" or "Add to Home screen". You sign in once more inside
+              it.
+            </p>
+          </div>
+        </div>
+        <div className="setting">
+          <div>
             <h3>Signed in as {user.name ?? "you"}</h3>
             <p>{user.email ?? user.phone}</p>
           </div>
