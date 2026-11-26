@@ -1,5 +1,13 @@
 import Link from "next/link";
-import { claimAction, disputeAction, doneAction, payAction, skipAction, voteAction } from "@/app/actions";
+import {
+  claimAction,
+  disputeAction,
+  doneAction,
+  payAction,
+  settleNowAction,
+  skipAction,
+  voteAction,
+} from "@/app/actions";
 import { PhotoSubmit, SubmitButton } from "@/components/buttons";
 import { Flash, Masthead } from "@/components/frame";
 import { getDb } from "@/db";
@@ -12,6 +20,7 @@ import { disputableTurnIds, houseTurns, type TurnView } from "@/domain/views";
 import { requireMember } from "@/lib/current";
 import { ago, dateLabel, dueLabel, signedCents } from "@/lib/format";
 import { feeCents, formatCents } from "@/money";
+import { inboundIsOff } from "@/providers";
 
 type Props = { searchParams: Promise<Record<string, string | string[] | undefined>> };
 
@@ -150,7 +159,9 @@ export default async function HousePage({ searchParams }: Props) {
           <p>
             {overdue
               ? "It is overdue: you cannot win chore money until it is paid."
-              : "Pay by e-Transfer. Housepot spots it landing and marks it paid."}
+              : inboundIsOff()
+                ? "Pay by e-Transfer, then mark it as paid."
+                : "Pay by e-Transfer. Housepot spots it landing and marks it paid."}
           </p>
           <p>
             <Link href="/settle" className="btn btn-accent btn-block">
@@ -367,10 +378,18 @@ export default async function HousePage({ searchParams }: Props) {
               {formatCents(squareUp.unclaimedCents)} is waiting on unclaimed chores and is not counted here.
             </p>
           )}
-          {squareLines.length > 0 && (
-            <p className="small muted" style={{ marginTop: "var(--space-3)" }}>
-              These become real payments at the next settle-up on {dateLabel(house.settlementDate)}.
-            </p>
+          {squareLines.length > 0 && isActive && (
+            <>
+              <form action={settleNowAction} style={{ marginTop: "var(--space-4)" }}>
+                <SubmitButton className="btn btn-accent btn-block" pendingLabel="Settling up…">
+                  Settle up now
+                </SubmitButton>
+              </form>
+              <p className="small muted" style={{ marginTop: "var(--space-3)" }}>
+                This turns the list above into payments for the whole house and locks the bills behind it.
+                Otherwise it happens by itself on {dateLabel(house.settlementDate)}.
+              </p>
+            </>
           )}
         </section>
       )}

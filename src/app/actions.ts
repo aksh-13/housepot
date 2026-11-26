@@ -26,8 +26,8 @@ import {
   markDebtPaid,
   markDebtSent,
   settleUpHouse,
+  settleUpNow,
   textDebtPaid,
-  textDebtSent,
   textNewDebts,
 } from "@/domain/settleup";
 import { claimBounty, markDone, payToSkip } from "@/domain/turns";
@@ -456,15 +456,17 @@ export async function savePayoutAction(fd: FormData): Promise<void> {
   back(str(fd, "back") === "settle" ? "/settle" : "/house/settings", "notice", "Saved.");
 }
 
-export async function debtSentAction(fd: FormData): Promise<void> {
-  const user = await requireUser("/settle");
-  const sent = await markDebtSent(getDb(), { debtId: str(fd, "debtId"), userId: user.id, now: new Date() });
-  if (!sent.ok) back("/settle", "error", sent.error);
-  await textDebtSent(getProviders().sms, sent.debt, `${await baseUrl()}/settle`);
-  back("/settle", "notice", `Marked as sent. ${sent.debt.toName} will confirm when it lands.`);
+/** "Settle up now": turns the balances into payments straight away. Any housemate, no vote. */
+export async function settleNowAction(): Promise<void> {
+  const { member, house } = await requireMember("/house");
+  const settled = await settleUpNow(getDb(), { houseId: house.id, memberId: member.id, now: new Date() });
+  if (!settled.ok) back("/house", "error", settled.error);
+  await textNewDebts(getDb(), getProviders().sms, settled.debts, `${await baseUrl()}/settle`);
+  back("/settle", "notice", "Settled up. Here is who pays whom.");
 }
 
-export async function debtReceivedAction(fd: FormData): Promise<void> {
+/** Either person on a debt says it is paid. Nobody has to confirm. */
+export async function debtPaidAction(fd: FormData): Promise<void> {
   const user = await requireUser("/settle");
   const paid = await markDebtPaid(getDb(), {
     debtId: str(fd, "debtId"),
@@ -473,7 +475,10 @@ export async function debtReceivedAction(fd: FormData): Promise<void> {
     now: new Date(),
   });
   if (!paid.ok) back("/settle", "error", paid.error);
-  if (paid.changed) await textDebtPaid(getProviders().sms, paid.debt, `${await baseUrl()}/settle`);
+  if (paid.changed) {
+    const by = paid.debt.fromUserId === user.id ? "payer" : "receiver";
+    await textDebtPaid(getProviders().sms, paid.debt, `${await baseUrl()}/settle`, by);
+  }
   back("/settle", "notice", "Marked as paid.");
 }
 

@@ -47,6 +47,30 @@ export function minimalPayments(balances: { memberId: string; cents: number }[])
   return payments;
 }
 
+type Fail = { ok: false; error: string };
+
+/**
+ * Settles the house up right now, at any housemate's request. No vote: the "To square up" list has
+ * already shown everyone what they would pay. Does nothing when nobody owes anything.
+ */
+export async function settleUpNow(
+  db: Db,
+  a: { houseId: string; memberId: string; now: Date },
+): Promise<{ ok: true; debts: CreatedDebt[] } | Fail> {
+  const house = await getHouse(db, a.houseId);
+  if (!house || house.moneyMode !== "etransfer") {
+    return { ok: false, error: "Only houses that settle up by e-Transfer can do this." };
+  }
+  if (!(await activeMembers(db, a.houseId)).some((m) => m.id === a.memberId)) {
+    return { ok: false, error: "Only housemates can settle up." };
+  }
+  const { lines, unclaimedCents } = await houseSquareUp(db, a.houseId);
+  if (lines.length === 0 && unclaimedCents === 0) {
+    return { ok: false, error: "Everyone is square. There is nothing to settle." };
+  }
+  return { ok: true, debts: await settleUpHouse(db, { houseId: a.houseId, now: a.now, reason: "early" }) };
+}
+
 export type SquareUpLine = Payment & { fromName: string; toName: string };
 
 /**
@@ -283,8 +307,6 @@ export async function hasOverdueDebt(db: Db, memberId: string, now: Date): Promi
   return rows.length > 0;
 }
 
-type Fail = { ok: false; error: string };
-
 /** The payer says they have sent the e-Transfer. The receiver still has to see it arrive. */
 export async function markDebtSent(
   db: Db,
@@ -311,8 +333,9 @@ export async function markDebtSent(
 }
 
 /**
- * The money arrived. Either the receiver says so (manual), or Interac's email to the receiver was
- * matched (email). Only the receiver can mark it by hand. Marking twice does nothing the second time.
+ * The debt is paid. Either one of the two people on it says so (manual), or Interac's email to the
+ * receiver was matched (email). The payer's word is enough: the house runs on trust, the receiver
+ * is told, and the activity feed shows it. Marking twice does nothing the second time.
  */
 export async function markDebtPaid(
   db: Db,
@@ -320,8 +343,8 @@ export async function markDebtPaid(
 ): Promise<{ ok: true; debt: DebtView; changed: boolean } | Fail> {
   const debt = await debtById(db, a.debtId);
   if (!debt) return { ok: false, error: "That debt does not exist." };
-  if (a.via === "manual" && debt.toUserId !== a.userId) {
-    return { ok: false, error: "Only the person being paid can say the money arrived." };
+  if (a.via === "manual" && debt.toUserId !== a.userId && debt.fromUserId !== a.userId) {
+    return { ok: false, error: "That is not your debt." };
   }
   const changed = await db.tx(async (t) => {
     const updated = await t.query(
@@ -386,8 +409,22 @@ export async function textDebtSent(sms: Sms, d: DebtView, link: string): Promise
 }
 
 /** Tells both sides a debt is cleared. */
-export async function textDebtPaid(sms: Sms, d: DebtView, link: string): Promise<void> {
+export async function textDebtPaid(
+  sms: Sms,
+  d: DebtView,
+  link: string,
+  /** Who said so. The payer does not need a message about the button they just pressed. */
+  by: "payer" | "receiver" = "receiver",
+): Promise<void> {
   const amount = formatCents(d.amountCents);
+  if (by === "payer") {
+    await send(
+      sms,
+      d.toContact,
+      `${d.fromName} says they paid you ${amount} by e-Transfer. It is marked as paid. ${link}`,
+    );
+    return;
+  }
   await send(sms, d.fromContact, `${d.toName} got your ${amount}. You are square. ${link}`);
   await send(sms, d.toContact, `${d.fromName}'s ${amount} arrived. Marked as paid. ${link}`);
 }
