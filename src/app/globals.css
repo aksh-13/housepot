@@ -706,22 +706,24 @@ fieldset.field > legend {
   margin-bottom: var(--space-1);
 }
 
-/* On a phone the five tabs do not fit beside the wordmark, so they get their own line. */
-.nav a {
+/* There are too many tabs to sit beside the wordmark in this narrow column, so they get their own line. */
+.masthead-tabs {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-1);
+}
+
+.wordmark {
   white-space: nowrap;
 }
 
-@media (max-width: 480px) {
-  .masthead {
-    flex-direction: column;
-    align-items: stretch;
-    gap: var(--space-1);
-  }
+.masthead-tabs .nav {
+  justify-content: space-between;
+  gap: var(--space-2);
+}
 
-  .nav {
-    justify-content: space-between;
-    gap: var(--space-2);
-  }
+.nav a {
+  white-space: nowrap;
 }
 
 /* A long name with no spaces must wrap, not push the page sideways. */

@@ -1,8 +1,10 @@
 import Link from "next/link";
 import {
+  assignTurnAction,
   claimAction,
   disputeAction,
   doneAction,
+  nudgeAction,
   payAction,
   settleNowAction,
   skipAction,
@@ -19,6 +21,7 @@ import { listChores } from "@/domain/chores";
 import { openDisputes } from "@/domain/disputes";
 import { houseBalances } from "@/domain/ledger";
 import { debtsForUser, houseSquareUp } from "@/domain/settleup";
+import { listNudges, teamOnDuty } from "@/domain/teams";
 import { DONE_OPENS_MS } from "@/domain/turns";
 import { disputableTurnIds, houseTurns, type TurnView } from "@/domain/views";
 import { baseUrl, requireMember } from "@/lib/current";
@@ -64,7 +67,20 @@ function describe(item: ActivityItem, meId: string): { text: string; cents?: num
     case "skipped":
       return { text: `${who} skipped ${chore}`, cents: -amount };
     case "missed":
-      return { text: `${who} missed ${chore}`, cents: -amount };
+      return {
+        text: item.data.teamName ? `${item.data.teamName} missed ${chore}` : `${who} missed ${chore}`,
+        cents: -amount,
+      };
+    case "team_added":
+      return { text: `${who} added ${item.data.name}` };
+    case "team_removed":
+      return { text: `${who} removed ${item.data.name}` };
+    case "teams_saved":
+      return { text: `${who} changed the teams` };
+    case "nudged":
+      return { text: `${who} told ${item.data.teamName}: ${item.data.label}` };
+    case "turn_assigned":
+      return { text: `${who} gave ${chore} to ${item.data.toName}` };
     case "dispute_raised":
       return { text: `${who} disputed ${chore}` };
     case "dispute_passed":
@@ -122,6 +138,7 @@ const midSentence = (label: string) =>
   label.replace(/^(Today|Tomorrow|Yesterday)/, (word) => word.toLowerCase());
 
 function openReason(turn: TurnView, meId: string): string {
+  if (turn.teamName) return `${turn.teamName} missed it.`;
   const mine = turn.assigneeMemberId === meId;
   if (turn.openedReason === "skip") return mine ? "You skipped this." : `${turn.assigneeName} skipped it.`;
   if (turn.openedReason === "dispute") return "The house said it was not done.";
@@ -143,6 +160,7 @@ export default async function HousePage({ searchParams }: Props) {
     etransfer ? debtsForUser(db, user.id) : Promise.resolve([]),
     etransfer ? houseSquareUp(db, house.id) : Promise.resolve({ lines: [], unclaimedCents: 0 }),
   ]);
+  const [duty, nudges] = await Promise.all([teamOnDuty(db, house.id, now), listNudges(db, house.id)]);
   // The viewer's own payments first: what they pay, what they get, then everyone else's.
   const involvesMe = (l: { fromMemberId: string; toMemberId: string }) =>
     l.fromMemberId === member.id || l.toMemberId === member.id;
@@ -157,7 +175,14 @@ export default async function HousePage({ searchParams }: Props) {
   const isActive = member.status === "active";
   const mine = turns.filter((t) => t.status === "assigned" && t.assigneeMemberId === member.id);
   const open = turns.filter((t) => t.status === "open");
-  const others = turns.filter((t) => t.status === "assigned" && t.assigneeMemberId !== member.id);
+  // Chores my team has that a teammate is down for: I can still do them, or take them over.
+  const myTeams = turns.filter(
+    (t) =>
+      t.status === "assigned" && t.teamId && t.teamId === member.teamId && t.assigneeMemberId !== member.id,
+  );
+  const others = turns.filter(
+    (t) => t.status === "assigned" && t.assigneeMemberId !== member.id && !myTeams.includes(t),
+  );
   const potTotal = balances.reduce((sum, b) => sum + b.balanceCents, 0);
   const inviteUrl = `${await baseUrl()}/join/${house.inviteCode}`;
 
@@ -174,6 +199,42 @@ export default async function HousePage({ searchParams }: Props) {
             Add a bill
           </Link>
         </p>
+      )}
+
+      {duty && (
+        <section className="section">
+          <h2 className="label">On duty</h2>
+          <div className="row">
+            <span>
+              {duty.team.name}
+              {duty.team.id === member.teamId && <span className="muted"> (your team)</span>}
+            </span>
+            <span className="leader" />
+            <span className="small muted">until {dateLabel(duty.until)}</span>
+          </div>
+          <p className="small muted">
+            {duty.team.memberNames.length > 0
+              ? duty.team.memberNames.join(", ")
+              : "Nobody is on this team yet."}
+          </p>
+          {isActive && nudges.length > 0 && (
+            <div className="nudges">
+              {nudges.map((nudge) => (
+                <form key={nudge.id} action={nudgeAction}>
+                  <input type="hidden" name="nudgeId" value={nudge.id} />
+                  <SubmitButton className="btn" pendingLabel="Telling them…">
+                    {nudge.label}
+                  </SubmitButton>
+                </form>
+              ))}
+            </div>
+          )}
+          {isActive && nudges.length > 0 && (
+            <p className="small muted" style={{ marginTop: "var(--space-2)" }}>
+              Tap one to email everyone on {duty.team.name}.
+            </p>
+          )}
+        </section>
       )}
 
       {balances.length < 2 && (
@@ -268,6 +329,7 @@ export default async function HousePage({ searchParams }: Props) {
                 </div>
                 <p className="meta">
                   Due {midSentence(dueLabel(turn.dueAt, now, house.tz))}
+                  {turn.teamName && ` · ${turn.teamName}'s chore, and you have it`}
                   {turn.bountyCents > 0 && " · a bounty is waiting if you do it on time"}
                 </p>
                 <div className="actions">
@@ -282,18 +344,54 @@ export default async function HousePage({ searchParams }: Props) {
                       <PhotoSubmit label="Done" />
                     </form>
                   )}
-                  <form action={skipAction}>
-                    <input type="hidden" name="turnId" value={turn.id} />
-                    <SubmitButton pendingLabel="Skipping…">
-                      {etransfer
-                        ? `Skip for ${formatCents(turn.skipPriceCents)}`
-                        : `Pay ${formatCents(turn.skipPriceCents)} to skip`}
-                    </SubmitButton>
-                  </form>
+                  {turn.teamId ? (
+                    <p className="small muted">
+                      A team chore cannot be skipped. If nobody on {turn.teamName} does it, the{" "}
+                      {formatCents(turn.skipPriceCents)} is shared by the team.
+                    </p>
+                  ) : (
+                    <form action={skipAction}>
+                      <input type="hidden" name="turnId" value={turn.id} />
+                      <SubmitButton pendingLabel="Skipping…">
+                        {etransfer
+                          ? `Skip for ${formatCents(turn.skipPriceCents)}`
+                          : `Pay ${formatCents(turn.skipPriceCents)} to skip`}
+                      </SubmitButton>
+                    </form>
+                  )}
                 </div>
               </article>
             ))
           )}
+        </section>
+      )}
+
+      {isActive && myTeams.length > 0 && (
+        <section className="section">
+          <h2 className="label">Your team's chores</h2>
+          {myTeams.map((turn) => (
+            <article key={turn.id} className="turn">
+              <div className="turn-head">
+                <h3>{turn.choreName}</h3>
+                {turn.bountyCents > 0 && <span className="bounty">+{formatCents(turn.bountyCents)}</span>}
+              </div>
+              <p className="meta">
+                {turn.assigneeName} has it · due {midSentence(dueLabel(turn.dueAt, now, house.tz))}
+              </p>
+              <div className="actions">
+                {turn.dueAt.getTime() - now.getTime() <= DONE_OPENS_MS && (
+                  <form action={doneAction}>
+                    <input type="hidden" name="turnId" value={turn.id} />
+                    <PhotoSubmit label="I did it" />
+                  </form>
+                )}
+                <form action={assignTurnAction}>
+                  <input type="hidden" name="turnId" value={turn.id} />
+                  <SubmitButton pendingLabel="Saving…">I'll take it</SubmitButton>
+                </form>
+              </div>
+            </article>
+          ))}
         </section>
       )}
 
@@ -381,7 +479,10 @@ export default async function HousePage({ searchParams }: Props) {
           {others.map((turn) => (
             <div key={turn.id} className="row">
               <span>
-                {turn.choreName} <span className="muted">· {turn.assigneeName}</span>
+                {turn.choreName}{" "}
+                <span className="muted">
+                  · {turn.teamName ? `${turn.teamName}, ${turn.assigneeName}` : turn.assigneeName}
+                </span>
               </span>
               <span className="leader" />
               <span className="small muted">{dueLabel(turn.dueAt, now, house.tz)}</span>

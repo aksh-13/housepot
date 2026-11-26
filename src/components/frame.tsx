@@ -21,7 +21,7 @@ export function Masthead({ current, settle = false }: { current?: Tab; settle?: 
     ["settings", "Settings", "/house/settings"],
   ];
   return (
-    <header className="masthead">
+    <header className="masthead masthead-tabs">
       <Link href="/house" className="wordmark">
         Housepot
       </Link>

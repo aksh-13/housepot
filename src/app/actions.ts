@@ -32,7 +32,7 @@ import {
   textNewDebts,
 } from "@/domain/settleup";
 import { addNudge, addTeam, removeNudge, removeTeam, saveTeams, sendNudge } from "@/domain/teams";
-import { claimBounty, markDone, payToSkip } from "@/domain/turns";
+import { assignTurn, claimBounty, markDone, payToSkip } from "@/domain/turns";
 import { textBountyOpen } from "@/domain/views";
 import {
   baseUrl,
@@ -468,6 +468,21 @@ export async function removeNudgeAction(fd: FormData): Promise<void> {
   const removed = await removeNudge(getDb(), { nudgeId: str(fd, "nudgeId"), memberId: member.id });
   if (!removed.ok) back("/teams", "error", removed.error);
   back("/teams", "notice", "Nudge removed.");
+}
+
+/** Gives a team chore to someone on that team: "I'll take it" on the House page, or the picker on Teams. */
+export async function assignTurnAction(fd: FormData): Promise<void> {
+  const { member } = await requireMember("/house");
+  const page = str(fd, "back") === "teams" ? "/teams" : "/house";
+  const toMemberId = str(fd, "toMemberId") || member.id;
+  const given = await assignTurn(getDb(), {
+    turnId: str(fd, "turnId"),
+    memberId: member.id,
+    toMemberId,
+    now: new Date(),
+  });
+  if (!given.ok) back(page, "error", given.error);
+  back(page, "notice", toMemberId === member.id ? "It is yours now." : "Done. They are down for it now.");
 }
 
 /** A nudge button on the House page: tells the team on duty. */

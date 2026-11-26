@@ -2,6 +2,7 @@ import { DateTime } from "luxon";
 import {
   addNudgeAction,
   addTeamAction,
+  assignTurnAction,
   removeNudgeAction,
   removeTeamAction,
   saveTeamsAction,
@@ -11,8 +12,9 @@ import { Flash, Masthead } from "@/components/frame";
 import { getDb } from "@/db";
 import { activeMembers } from "@/domain/houses";
 import { DEFAULT_TEAM_WEEKS, listNudges, listTeams, MAX_TEAM_WEEKS, teamOnDuty } from "@/domain/teams";
+import { houseTurns } from "@/domain/views";
 import { requireMember } from "@/lib/current";
-import { dateLabel } from "@/lib/format";
+import { dateLabel, dueLabel } from "@/lib/format";
 import { localDate } from "@/time";
 
 type Props = { searchParams: Promise<Record<string, string | string[] | undefined>> };
@@ -22,12 +24,14 @@ export default async function TeamsPage({ searchParams }: Props) {
   const { member, house } = await requireMember("/teams");
   const db = getDb();
   const now = new Date();
-  const [teams, housemates, nudges, duty] = await Promise.all([
+  const [teams, housemates, nudges, duty, turns] = await Promise.all([
     listTeams(db, house.id),
     activeMembers(db, house.id),
     listNudges(db, house.id),
     teamOnDuty(db, house.id, now),
+    houseTurns(db, house.id),
   ]);
+  const teamTurns = turns.filter((t) => t.status === "assigned" && t.teamId);
   const canEdit = member.status === "active";
   const thisMonday = DateTime.fromISO(localDate(now, house.tz)).startOf("week").toISODate() ?? "";
   const unassigned = housemates.filter((m) => !m.teamId);
@@ -74,6 +78,49 @@ export default async function TeamsPage({ searchParams }: Props) {
               <p className="empty">Set the rotation below.</p>
             )}
           </section>
+
+          {teamTurns.length > 0 && (
+            <section className="section">
+              <h2 className="label">Who has what</h2>
+              <p className="small muted">
+                Team chores are spread across the team automatically. Change who has one here.
+              </p>
+              {teamTurns.map((turn) => {
+                const team = teams.find((t) => t.id === turn.teamId);
+                return (
+                  <form key={turn.id} action={assignTurnAction} className="row">
+                    <input type="hidden" name="turnId" value={turn.id} />
+                    <input type="hidden" name="back" value="teams" />
+                    <label htmlFor={`has-${turn.id}`}>
+                      {turn.choreName}{" "}
+                      <span className="muted small">· {dueLabel(turn.dueAt, now, house.tz)}</span>
+                    </label>
+                    <span className="leader" />
+                    <select
+                      id={`has-${turn.id}`}
+                      name="toMemberId"
+                      className="input team-pick"
+                      defaultValue={turn.assigneeMemberId}
+                      disabled={!canEdit}
+                    >
+                      {(team?.memberIds ?? []).map((id, i) => (
+                        <option key={id} value={id}>
+                          {team?.memberNames[i]}
+                        </option>
+                      ))}
+                    </select>
+                    {canEdit && (
+                      <span className="row-action">
+                        <SubmitButton className="btn btn-small" pendingLabel="…">
+                          Give
+                        </SubmitButton>
+                      </span>
+                    )}
+                  </form>
+                );
+              })}
+            </section>
+          )}
 
           <section className="section">
             <h2 className="label">Teams and rotation</h2>
