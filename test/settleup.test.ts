@@ -333,13 +333,33 @@ test("an overdue debt stops you claiming bounties until it is paid", async () =>
   expect(allowed.ok).toBe(true);
 });
 
-test("the tick settles up on the 1st once, texts both sides, and does not stop the house", async () => {
+// The owner's call: housemates settle up when they choose to. Nothing turns balances into payment
+// requests on a date, because some people take a long time to pay and should not be put on a clock
+// they did not start.
+test("the tick never settles an e-Transfer house up by itself", async () => {
   await aSkipsBClaims();
   await db.query("delete from sms_outbox");
-  const first = await runTick(db, { sms, payments }, DEC_1, "https://housepot.test");
-  expect(first).toMatchObject({ settled: 1, debtsCreated: 1 });
-  const second = await runTick(db, { sms, payments }, plus(DEC_1, 5 * 60_000), "https://housepot.test");
-  expect(second).toMatchObject({ settled: 0, debtsCreated: 0 });
+  const onTheFirst = await runTick(db, { sms, payments }, DEC_1, "https://housepot.test");
+  expect(onTheFirst).toMatchObject({ settled: 0, debtsCreated: 0 });
+  expect(await balances()).toEqual([-500, 500, 0]);
+  // A month on, still nothing. (Balances are not compared again: by then a chore turn has been missed.)
+  const aMonthLater = await runTick(
+    db,
+    { sms, payments },
+    plus(DEC_1, 31 * 24 * HOUR),
+    "https://housepot.test",
+  );
+  expect(aMonthLater).toMatchObject({ settled: 0, debtsCreated: 0 });
+  expect(await debts()).toEqual([]);
+  expect((await texts()).filter((t) => /settle-up|you owe|owes you/.test(t.body))).toEqual([]);
+});
+
+test("settling up by hand still texts both sides and does not stop the house", async () => {
+  await aSkipsBClaims();
+  await db.query("delete from sms_outbox");
+  const result = await settleUpNow(db, { houseId: house.houseId, memberId: a, now: DEC_1 });
+  if (!result.ok) throw new Error(result.error);
+  await textNewDebts(db, sms, result.debts, "https://housepot.test/settle");
   expect(await debts()).toHaveLength(1);
 
   const sent = await texts();

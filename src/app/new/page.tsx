@@ -54,8 +54,8 @@ export default async function NewHousePage({ searchParams }: Props) {
                 <label className="check">
                   <input type="radio" name="moneyMode" value="etransfer" defaultChecked />
                   <span>
-                    <strong>Settle up by e-Transfer.</strong> Free. Nobody pays in: once a month, whoever is
-                    down sends whoever is up an e-Transfer.
+                    <strong>Settle up by e-Transfer.</strong> Free. Nobody pays in: when you are ready,
+                    whoever is down sends whoever is up an e-Transfer.
                   </span>
                 </label>
                 <label className="check">

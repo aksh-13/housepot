@@ -412,8 +412,8 @@ export default async function HousePage({ searchParams }: Props) {
               </form>
               <p className="small muted" style={{ marginTop: "var(--space-3)" }}>
                 Pay or Request on a line is just between you and that person. "Request all payments" asks
-                everyone on the list to pay now and locks the bills behind it; otherwise that happens by
-                itself on {dateLabel(house.settlementDate)}.
+                everyone on the list to pay now and locks the bills behind it. Nothing is requested until
+                someone presses one of these.
               </p>
             </>
           )}
@@ -422,7 +422,7 @@ export default async function HousePage({ searchParams }: Props) {
 
       {etransfer ? (
         <section className="section">
-          <h2 className="label">This month</h2>
+          <h2 className="label">Balances</h2>
           {balances.map((b) => (
             <div key={b.memberId} className="row">
               <span>
@@ -436,8 +436,8 @@ export default async function HousePage({ searchParams }: Props) {
             </div>
           ))}
           <p className="small muted" style={{ marginTop: "var(--space-3)" }}>
-            Nobody pays in. On {dateLabel(house.settlementDate)} the house settles up: whoever is down sends
-            whoever is up an e-Transfer.
+            Nobody pays in. These are running balances from bills and chores. They stay here until you pay or
+            request each other above.
           </p>
         </section>
       ) : (

@@ -10,7 +10,7 @@ import { BANKS, getHouse, memberForUser } from "@/domain/houses";
 import { recentInbound } from "@/domain/inbound";
 import { type DebtView, debtsForUser, houseSquareUp } from "@/domain/settleup";
 import { requireUser } from "@/lib/current";
-import { ago, dateLabel, dueLabel } from "@/lib/format";
+import { ago, dueLabel } from "@/lib/format";
 import { formatCents } from "@/money";
 import { inboundIsOff } from "@/providers";
 
@@ -207,9 +207,8 @@ export default async function SettlePage({ searchParams }: Props) {
       <Flash params={await searchParams} />
       <h1 className="house-name">Settle up</h1>
       <p className="muted small" style={{ marginTop: "var(--space-2)" }}>
-        Housepot never holds your money. You pay each other by e-Transfer, whenever you like or all at once
-        each month.
-        {house?.moneyMode === "etransfer" && ` Next settle-up: ${dateLabel(house.settlementDate)}.`}
+        Housepot never holds your money. You pay each other by e-Transfer, whenever you like. Nothing is
+        requested until one of you asks.
       </p>
 
       {member && !member.etransferEmail && (

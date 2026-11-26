@@ -10,7 +10,7 @@ import { activeMembers, HOUSE_COLUMNS, type House, type Member } from "./houses"
 import { choreBounty, memberBalance } from "./ledger";
 import { applyPaymentEvent } from "./payments";
 import { settleHouse } from "./settlement";
-import { FIRST_REMINDER_MS, settleUpHouse, textNewDebts } from "./settleup";
+import { FIRST_REMINDER_MS } from "./settleup";
 import { missTurn } from "./turns";
 
 const TICK_LOCK_KEY = 4827002;
@@ -233,13 +233,9 @@ async function remindDebts(ctx: Ctx, house: House): Promise<void> {
 }
 
 async function tickEtransferHouse(ctx: Ctx, house: House): Promise<void> {
-  // Settling up does not stop the house: unlike a card house nobody has to pay back in.
-  if (house.settlementDate <= localDate(ctx.now, house.tz)) {
-    const debts = await settleUpHouse(ctx.db, { houseId: house.id, now: ctx.now, reason: "scheduled" });
-    ctx.summary.settled += 1;
-    ctx.summary.debtsCreated += debts.length;
-    await textNewDebts(ctx.db, ctx.p.sms, debts, ctx.settleLink);
-  }
+  // Nothing settles an e-Transfer house up on a date. Housemates pay or request each other when they
+  // choose to, from the House page: some people take a long time to pay, and a deadline they did not
+  // start only produces overdue debts. Payments someone has asked for are still chased below.
   await remindDebts(ctx, house);
   if (house.paused) return;
   await chargeMisses(ctx, house, await activeMembers(ctx.db, house.id));
