@@ -11,6 +11,7 @@ import {
 import { PhotoSubmit, ShareLink, SubmitButton } from "@/components/buttons";
 import { Flash, Masthead } from "@/components/frame";
 import { InstallHint } from "@/components/install-hint";
+import { LiveRefresh } from "@/components/live-refresh";
 import { SquareUpList } from "@/components/square-up";
 import { getDb } from "@/db";
 import { type ActivityItem, recentActivity } from "@/domain/activity";
@@ -159,6 +160,7 @@ export default async function HousePage({ searchParams }: Props) {
   return (
     <main className="shell">
       <Masthead current="house" settle={etransfer} />
+      <LiveRefresh />
       <Flash params={await searchParams} />
       <h1 className="house-name">{house.name}</h1>
       <InstallHint />
