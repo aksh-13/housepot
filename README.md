@@ -45,10 +45,10 @@ Each house picks one when it is created. The chore rules above are the same in b
 
 ### How settling up works (e-Transfer houses)
 
-1. On the 1st (or when someone leaves, or the house votes for it), unclaimed bounties are shared out and the scores become the fewest possible payments, at most one fewer than the number of people.
+1. On the 1st (or when someone leaves, or any housemate presses **Settle up now** on the House page), unclaimed bounties are shared out and the scores become the fewest possible payments, at most one fewer than the number of people.
 2. Each payment has a code like `HP-7K3Q`. Both people get a text and see it on `/settle`.
 3. The person owed can send an Interac **money request**. Once Housepot sees it, the payer's **Pay** button opens that request, and their bank shows it already filled in. Otherwise the payer gets copy buttons for the email and code, and an "Open my bank" shortcut.
-4. The payer puts the code in the e-Transfer message. When Interac's "you got money" email reaches Housepot, the payment is marked paid with nobody tapping anything. "I sent it" and "It arrived" buttons cover anyone without forwarding set up.
+4. The payer sends the e-Transfer and presses **I've paid**. That marks it paid and tells the other person; nobody has to confirm. The person owed can also press **Mark as paid**. With automatic checking on, the code in the e-Transfer message lets Interac's "you got money" email mark it paid with nobody tapping anything.
 5. A reminder after a day, another when it is overdue (3 days). Someone with an overdue payment cannot claim bounties until it is paid.
 
 There is no public way to open a bank's e-Transfer form already filled in, and Interac's API is only for registered businesses, at a fee per transfer. The request link is the closest free thing.

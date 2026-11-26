@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { debtReceivedAction, debtSentAction } from "@/app/actions";
+import { debtPaidAction } from "@/app/actions";
 import { CopyButton, SubmitButton } from "@/components/buttons";
 import { Flash, Masthead } from "@/components/frame";
 import { getDb } from "@/db";
@@ -79,7 +79,11 @@ function YouPay({ d, bank, now, tz }: { d: DebtView; bank: string | null; now: D
                 <span className="value code">{d.code}</span>
                 <CopyButton value={d.code} label="Copy" />
               </div>
-              <span>It lets Housepot see the payment land and mark it paid by itself.</span>
+              <span>
+                {inboundIsOff()
+                  ? `So ${d.toName} can tell what the payment is for.`
+                  : "It lets Housepot see the payment land and mark it paid by itself."}
+              </span>
             </div>
           </li>
           <li>
@@ -98,16 +102,17 @@ function YouPay({ d, bank, now, tz }: { d: DebtView; bank: string | null; now: D
         </ol>
       )}
 
-      {d.status === "owed" && (
-        <div className="actions actions-one">
-          <form action={debtSentAction}>
-            <input type="hidden" name="debtId" value={d.id} />
-            <SubmitButton className="btn" pendingLabel="Saving…">
-              I sent it
-            </SubmitButton>
-          </form>
-        </div>
-      )}
+      <div className="actions actions-one">
+        <form action={debtPaidAction}>
+          <input type="hidden" name="debtId" value={d.id} />
+          <SubmitButton className="btn btn-accent" pendingLabel="Saving…">
+            I've paid
+          </SubmitButton>
+        </form>
+      </div>
+      <p className="small muted" style={{ marginTop: "var(--space-2)" }}>
+        Press this once you have sent the e-Transfer. {d.toName} is told, and it is marked as paid.
+      </p>
       {!d.requestUrl && !inboundIsOff() && (
         <p className="small muted" style={{ marginTop: "var(--space-3)" }}>
           Or ask {d.toName} to send you an Interac request. If your forwarding is set up, this turns into one
@@ -151,10 +156,10 @@ function YouGet({ d, now, tz }: { d: DebtView; now: Date; tz: string }) {
         </div>
       )}
       <div className="actions actions-one">
-        <form action={debtReceivedAction}>
+        <form action={debtPaidAction}>
           <input type="hidden" name="debtId" value={d.id} />
           <SubmitButton className="btn" pendingLabel="Saving…">
-            It arrived
+            Mark as paid
           </SubmitButton>
         </form>
       </div>
@@ -240,7 +245,7 @@ export default async function SettlePage({ searchParams }: Props) {
                 {d.fromUserId === user.id ? `You paid ${d.toName}` : `${d.fromName} paid you`}
                 <span className="muted small">
                   {" "}
-                  · {d.paidVia === "email" ? "checked automatically" : "confirmed by hand"}
+                  · {d.paidVia === "email" ? "checked automatically" : "marked as paid"}
                 </span>
               </span>
               <span className="leader" />

@@ -195,22 +195,32 @@ export default async function SettingsPage({ searchParams }: Props) {
             <SubmitButton>{house.paused ? "Resume" : "Pause"}</SubmitButton>
           </form>
         </div>
-        <div className="setting">
-          <div>
-            <h3>{etransfer ? "Settle up early" : "Cash out early"}</h3>
-            <p>
-              {etransfer
-                ? `The house settles up on ${dateLabel(house.settlementDate)}. To do it sooner, more than half the house has to agree`
-                : `Everyone is cashed out on ${dateLabel(house.settlementDate)}. To close the pot sooner, more than half the house has to agree`}{" "}
-              ({closeVotes.votes.length} of {closeVotes.needed} so far).
-            </p>
+        {etransfer ? (
+          <div className="setting">
+            <div>
+              <h3>Settle up early</h3>
+              <p>
+                The house settles up by itself on {dateLabel(house.settlementDate)}. Any housemate can do it
+                sooner with "Settle up now" on the House page.
+              </p>
+            </div>
           </div>
-          {isActive && (
-            <form action={closeVoteAction}>
-              <SubmitButton>{votedToClose ? "Voted" : "Vote"}</SubmitButton>
-            </form>
-          )}
-        </div>
+        ) : (
+          <div className="setting">
+            <div>
+              <h3>Cash out early</h3>
+              <p>
+                Everyone is cashed out on {dateLabel(house.settlementDate)}. To close the pot sooner, more
+                than half the house has to agree ({closeVotes.votes.length} of {closeVotes.needed} so far).
+              </p>
+            </div>
+            {isActive && (
+              <form action={closeVoteAction}>
+                <SubmitButton>{votedToClose ? "Voted" : "Vote"}</SubmitButton>
+              </form>
+            )}
+          </div>
+        )}
       </section>
 
       <section className="section stack">
