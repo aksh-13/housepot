@@ -24,8 +24,8 @@ alter table houses
 alter table chores add column team_duty boolean not null default false;
 
 -- Set on a turn that belongs to a team. assignee_member_id still names one member of that team,
--- because every turn must name a housemate, but nothing reads it for a team turn: who may do it
--- and who pays for a miss both come from the team.
+-- the teammate it is given to (named and reminded). Who may do it
+-- and who pays for a miss both come from the team, not from that person.
 alter table turns add column team_id uuid references teams(id) on delete set null;
 
 -- One-tap messages to the team on duty, like "Garbage is full".

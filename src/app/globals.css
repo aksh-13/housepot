@@ -754,6 +754,19 @@ fieldset.field > legend {
   flex: none;
 }
 
+/* Picking a team for one housemate: a short select at the end of their row. */
+.input.team-pick {
+  width: 9rem;
+}
+
+/* The nudge buttons under "On duty". */
+.nudges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
 /* A small button at the end of a row, such as "Settle" next to one person in To square up. */
 .row .row-action {
   margin-left: var(--space-3);

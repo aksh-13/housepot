@@ -113,7 +113,10 @@ async function sendReminders(ctx: Ctx, house: House, members: Member[]): Promise
       : members.filter((m) => m.id === turn.assignee_member_id);
     if (remind.length === 0) continue;
     const whose = turn.team_id ? "your team's" : "yours";
-    const options = turn.team_id ? "Whoever does it sends a photo" : "Done or skip";
+    const has = members.find((m) => m.id === turn.assignee_member_id)?.name;
+    const options = turn.team_id
+      ? `${has ? `${has} has it, and anyone` : "Anyone"} on the team can do it with a photo`
+      : "Done or skip";
     const dueLocal = DateTime.fromJSDate(turn.due_at, { zone: house.tz });
     const by = dueLocal.toFormat("h:mm a");
     const finalDue =

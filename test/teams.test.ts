@@ -17,7 +17,7 @@ import {
   teamOnDuty,
 } from "@/domain/teams";
 import { runTick } from "@/domain/tick";
-import { claimBounty, markDone, missTurn, payToSkip, skipWaitingTurnsOf } from "@/domain/turns";
+import { assignTurn, claimBounty, markDone, missTurn, payToSkip, skipWaitingTurnsOf } from "@/domain/turns";
 import { houseTurns } from "@/domain/views";
 import { fakePayments } from "@/providers/payments";
 import { fakeSms } from "@/providers/sms";
@@ -299,7 +299,7 @@ describe("nudging the team on duty", () => {
           houseId: house.houseId,
           memberId: ben,
           label: "  Dishes are piling up  ",
-          now: NOW,
+          now: LATE,
         })
       ).ok,
     ).toBe(true);
@@ -340,9 +340,15 @@ describe("the scheduler and team chores", () => {
     expect(sent.map((m) => m.to_phone).sort()).toEqual(
       [house.members[0].phone, house.members[1].phone].sort(),
     );
-    expect(sent[0].body).toBe(
-      "Garbage is your team's today, by 9:00 PM. Whoever does it sends a photo: https://housepot.test/house",
-    );
+    const has = (await db.query("select assignee_member_id from turns where status = 'assigned'")).rows[0]
+      .assignee_member_id;
+    const name = has === ana ? "Ana" : "Ben";
+    expect(sent.map((m) => m.body)).toEqual([
+      ...new Set([
+        `Garbage is your team's today, by 9:00 PM. ${name} has it, and anyone on the team can do it with a photo: https://housepot.test/house`,
+      ]),
+      `Garbage is your team's today, by 9:00 PM. ${name} has it, and anyone on the team can do it with a photo: https://housepot.test/house`,
+    ]);
   });
 
   test("a missed team chore charges the team and tells everyone what happened", async () => {
@@ -360,5 +366,96 @@ describe("the scheduler and team chores", () => {
     expect(toCy).toEqual([
       "Garbage is open: +$5 to whoever does it, with a photo. https://housepot.test/house",
     ]);
+  });
+});
+
+describe("who on the team has which chore", () => {
+  async function chore(name: string): Promise<void> {
+    const r = await createChore(db, {
+      houseId: house.houseId,
+      memberId: cy,
+      name,
+      schedule: { kind: "weekly", weekday: 4 },
+      deadlineTime: "21:00",
+      teamDuty: true,
+      now: NOW,
+    });
+    if (!r.ok) throw new Error(r.error);
+  }
+  const whoHas = async () =>
+    Object.fromEntries(
+      (
+        await db.query(
+          "select c.name, t.assignee_member_id from turns t join chores c on c.id = t.chore_id where t.status = 'assigned'",
+        )
+      ).rows.map((r) => [r.name, r.assignee_member_id]),
+    );
+
+  test("chores are spread across the team, so each person gets one before anyone gets two", async () => {
+    await chore("Garbage");
+    await chore("Bathroom");
+    await chore("Kitchen");
+    await ensureTurns(db, house.houseId, NOW);
+    const has = await whoHas();
+    expect([has.Garbage, has.Bathroom].sort()).toEqual([ana, ben].sort());
+    expect([ana, ben]).toContain(has.Kitchen);
+  });
+
+  test("the same chore moves to the next teammate the following week", async () => {
+    await chore("Garbage");
+    await ensureTurns(db, house.houseId, NOW);
+    const first = (await whoHas()).Garbage;
+    await db.query("update turns set status = 'done' where status = 'assigned'");
+    await ensureTurns(db, house.houseId, NOW);
+    const second = (await whoHas()).Garbage;
+    expect([first, second].sort()).toEqual([ana, ben].sort());
+  });
+
+  test("anyone in the house can give a team chore to someone else on that team", async () => {
+    await chore("Garbage");
+    await ensureTurns(db, house.houseId, NOW);
+    const turn = await waiting();
+    const other = (await whoHas()).Garbage === ana ? ben : ana;
+    expect(await assignTurn(db, { turnId: turn.id, memberId: dee, toMemberId: other, now: NOW })).toEqual({
+      ok: true,
+    });
+    expect((await whoHas()).Garbage).toBe(other);
+    const [view] = await houseTurns(db, house.houseId);
+    expect(view).toMatchObject({ teamName: "Team A", assigneeMemberId: other });
+  });
+
+  test("a team chore cannot be given to someone on another team", async () => {
+    await chore("Garbage");
+    await ensureTurns(db, house.houseId, NOW);
+    const turn = await waiting();
+    expect(await assignTurn(db, { turnId: turn.id, memberId: ana, toMemberId: cy, now: NOW })).toEqual({
+      ok: false,
+      error: "Pick someone on Team A.",
+    });
+  });
+
+  test("a chore that goes to one person at a time cannot be handed over this way", async () => {
+    await garbage(false);
+    const turn = await waiting();
+    expect(await assignTurn(db, { turnId: turn.id, memberId: ana, toMemberId: ben, now: NOW })).toEqual({
+      ok: false,
+      error: "Only a team chore can be given to someone else.",
+    });
+  });
+
+  test("whoever has it, a teammate can still do it, and a miss is still shared", async () => {
+    await chore("Garbage");
+    await ensureTurns(db, house.houseId, NOW);
+    const turn = await waiting();
+    const has = (await whoHas()).Garbage;
+    const teammate = has === ana ? ben : ana;
+    expect(
+      (await markDone(db, { turnId: turn.id, memberId: teammate, photoId: await photo(teammate), now: NOW }))
+        .ok,
+    ).toBe(true);
+
+    await ensureTurns(db, house.houseId, NOW);
+    await missTurn(db, { turnId: (await waiting()).id, now: new Date("2026-11-20T02:00:01Z") });
+    expect(await balances()).toEqual([-250, -250, 0, 0]);
   });
 });

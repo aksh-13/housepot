@@ -135,6 +135,40 @@ export async function openTurn(
   });
 }
 
+/**
+ * Gives a team chore's waiting turn to someone else on that team. Any housemate can do it: the
+ * automatic spread is only a starting point, and houses sort out who does what among themselves.
+ * It changes who is named and reminded. Who may do it, and who pays for a miss, stay with the team.
+ */
+export async function assignTurn(
+  db: Db,
+  a: { turnId: string; memberId: string; toMemberId: string; now: Date },
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  return db.tx(async (t) => {
+    const turn = await lockTurn(t, a.turnId);
+    const actor = await memberById(t, a.memberId);
+    if (!turn || !actor || actor.houseId !== turn.house_id || actor.status !== "active") {
+      return fail("Only housemates can do that.");
+    }
+    if (turn.status !== "assigned") return fail("This turn is no longer waiting.");
+    if (!turn.team_id) return fail("Only a team chore can be given to someone else.");
+    const to = await memberById(t, a.toMemberId);
+    if (!to || to.status !== "active" || to.teamId !== turn.team_id) {
+      return fail(`Pick someone on ${turn.team_name ?? "that team"}.`);
+    }
+    if (to.id === turn.assignee_member_id) return { ok: true as const };
+    await t.query("update turns set assignee_member_id = $2 where id = $1", [turn.id, to.id]);
+    await logActivity(t, {
+      houseId: turn.house_id,
+      memberId: a.memberId,
+      kind: "turn_assigned",
+      data: { choreName: turn.chore_name, toName: to.name },
+      now: a.now,
+    });
+    return { ok: true as const };
+  });
+}
+
 type DoneArgs = { turnId: string; memberId: string; photoId: string; now: Date };
 
 /** A turn can be marked done from this long before its deadline, and no earlier. */
