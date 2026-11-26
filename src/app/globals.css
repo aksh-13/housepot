@@ -694,6 +694,41 @@ details.editor .body {
   line-height: 1.6;
 }
 
+/* A group of choices (how to split, who shares): no browser-default box around it. */
+fieldset.field {
+  border: 0;
+  padding: 0;
+  min-inline-size: 0;
+}
+
+fieldset.field > legend {
+  padding: 0;
+  margin-bottom: var(--space-1);
+}
+
+/* On a phone the five tabs do not fit beside the wordmark, so they get their own line. */
+.nav a {
+  white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+  .masthead {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-1);
+  }
+
+  .nav {
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+}
+
+/* A long name with no spaces must wrap, not push the page sideways. */
+.shell {
+  overflow-wrap: anywhere;
+}
+
 /* A one-time nudge on phones to add Housepot to the home screen. */
 .install-hint {
   display: flex;

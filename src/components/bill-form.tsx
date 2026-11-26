@@ -229,7 +229,12 @@ export function BillForm({ members, meId, initial, action, token, billId }: Prop
             </div>
           ))
         ) : (
-          <p className="note">{problem || "Type the total to see the split."}</p>
+          <p className="note">
+            {problem ||
+              (totalCents !== null && split === "receipt"
+                ? "Type the subtotal before tax to see the split."
+                : "Type the total to see the split.")}
+          </p>
         )}
         {preview.length > 0 && (
           <p className="note">
@@ -239,7 +244,12 @@ export function BillForm({ members, meId, initial, action, token, billId }: Prop
         )}
       </section>
 
-      <SubmitButton className="btn btn-primary btn-block" pendingLabel="Saving…">
+      {/* Nothing is sent while the split does not work, so a mistake never clears what was typed. */}
+      <SubmitButton
+        className="btn btn-primary btn-block"
+        pendingLabel="Saving…"
+        disabled={preview.length === 0}
+      >
         {billId ? "Save changes" : "Add bill"}
       </SubmitButton>
     </form>

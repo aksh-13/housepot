@@ -3,6 +3,7 @@ import {
   closeVoteAction,
   leaveAction,
   pauseAction,
+  renameAction,
   savePayoutAction,
   signOutAction,
 } from "@/app/actions";
@@ -253,9 +254,26 @@ export default async function SettingsPage({ searchParams }: Props) {
             </p>
           </div>
         </div>
+        <form action={renameAction}>
+          <div className="field">
+            <label htmlFor="name">Your name, as housemates see it</label>
+            <div className="invite">
+              <input
+                id="name"
+                name="name"
+                className="input"
+                defaultValue={user.name ?? ""}
+                maxLength={40}
+                autoComplete="given-name"
+                required
+              />
+              <SubmitButton>Save</SubmitButton>
+            </div>
+          </div>
+        </form>
         <div className="setting">
           <div>
-            <h3>Signed in as {user.name ?? "you"}</h3>
+            <h3>Signed in</h3>
             <p>{user.email ?? user.phone}</p>
           </div>
           <form action={signOutAction}>

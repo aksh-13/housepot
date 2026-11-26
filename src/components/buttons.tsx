@@ -3,13 +3,18 @@
 import { type ReactNode, useState } from "react";
 import { useFormStatus } from "react-dom";
 
-type SubmitProps = { children: ReactNode; className?: string; pendingLabel?: string };
+type SubmitProps = { children: ReactNode; className?: string; pendingLabel?: string; disabled?: boolean };
 
 /** A submit button that greys out and changes its label while its form is being sent. */
-export function SubmitButton({ children, className = "btn", pendingLabel = "Working…" }: SubmitProps) {
+export function SubmitButton({
+  children,
+  className = "btn",
+  pendingLabel = "Working…",
+  disabled = false,
+}: SubmitProps) {
   const { pending } = useFormStatus();
   return (
-    <button type="submit" className={className} disabled={pending}>
+    <button type="submit" className={className} disabled={pending || disabled}>
       {pending ? pendingLabel : children}
     </button>
   );

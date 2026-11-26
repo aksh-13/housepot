@@ -3,10 +3,11 @@ import { redirect } from "next/navigation";
 import { debtPaidAction } from "@/app/actions";
 import { CopyButton, SubmitButton } from "@/components/buttons";
 import { Flash, Masthead } from "@/components/frame";
+import { SquareUpList } from "@/components/square-up";
 import { getDb } from "@/db";
 import { BANKS, getHouse, memberForUser } from "@/domain/houses";
 import { recentInbound } from "@/domain/inbound";
-import { type DebtView, debtsForUser } from "@/domain/settleup";
+import { type DebtView, debtsForUser, houseSquareUp } from "@/domain/settleup";
 import { requireUser } from "@/lib/current";
 import { ago, dateLabel, dueLabel } from "@/lib/format";
 import { formatCents } from "@/money";
@@ -177,7 +178,17 @@ export default async function SettlePage({ searchParams }: Props) {
   const db = getDb();
   const member = await memberForUser(db, user.id);
   const house = member ? await getHouse(db, member.houseId) : null;
-  const [debts, inbound] = await Promise.all([debtsForUser(db, user.id), recentInbound(db, user.id, 20)]);
+  const [debts, inbound, squareUp] = await Promise.all([
+    debtsForUser(db, user.id),
+    recentInbound(db, user.id, 20),
+    house?.moneyMode === "etransfer"
+      ? houseSquareUp(db, house.id)
+      : Promise.resolve({ lines: [], unclaimedCents: 0 }),
+  ]);
+  // What I owe or am owed right now that nobody has asked for yet.
+  const myLines = squareUp.lines.filter((l) => l.fromMemberId === member?.id || l.toMemberId === member?.id);
+  const iStillOwe = myLines.some((l) => l.fromMemberId === member?.id);
+  const iAmStillOwed = myLines.some((l) => l.toMemberId === member?.id);
   if (!house && debts.length === 0) redirect("/");
   const tz = house?.tz ?? "America/Toronto";
   const now = new Date();
@@ -194,8 +205,8 @@ export default async function SettlePage({ searchParams }: Props) {
       <Flash params={await searchParams} />
       <h1 className="house-name">Settle up</h1>
       <p className="muted small" style={{ marginTop: "var(--space-2)" }}>
-        Housepot never holds your money. Once a month the scores turn into a few e-Transfers between
-        housemates.
+        Housepot never holds your money. You pay each other by e-Transfer, whenever you like or all at once
+        each month.
         {house?.moneyMode === "etransfer" && ` Next settle-up: ${dateLabel(house.settlementDate)}.`}
       </p>
 
@@ -218,10 +229,25 @@ export default async function SettlePage({ searchParams }: Props) {
         </section>
       )}
 
+      {member && myLines.length > 0 && (
+        <section className="section">
+          <h2 className="label">Not asked for yet</h2>
+          <SquareUpList lines={myLines} meId={member.id} canAct={member.status === "active"} />
+          <p className="small muted" style={{ marginTop: "var(--space-3)" }}>
+            This is where you stand right now from bills and chores. Pay or Request turns a line into a
+            payment below.
+          </p>
+        </section>
+      )}
+
       <section className="section">
         <h2 className="label">You pay</h2>
         {iPay.length === 0 ? (
-          <p className="empty">Nothing to pay. You are square.</p>
+          <p className="empty">
+            {iStillOwe
+              ? "No payment has been asked of you yet. See above."
+              : "Nothing to pay. You are square."}
+          </p>
         ) : (
           iPay.map((d) => <YouPay key={d.id} d={d} bank={member?.bank ?? null} now={now} tz={tz} />)
         )}
@@ -230,7 +256,11 @@ export default async function SettlePage({ searchParams }: Props) {
       <section className="section">
         <h2 className="label">You get</h2>
         {iGet.length === 0 ? (
-          <p className="empty">Nobody owes you anything right now.</p>
+          <p className="empty">
+            {iAmStillOwed
+              ? "Nobody has been asked to pay you yet. See above."
+              : "Nobody owes you anything right now."}
+          </p>
         ) : (
           iGet.map((d) => <YouGet key={d.id} d={d} now={now} tz={tz} />)
         )}

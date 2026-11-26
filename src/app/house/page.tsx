@@ -5,21 +5,22 @@ import {
   doneAction,
   payAction,
   settleNowAction,
-  settleWithAction,
   skipAction,
   voteAction,
 } from "@/app/actions";
-import { PhotoSubmit, SubmitButton } from "@/components/buttons";
+import { PhotoSubmit, ShareLink, SubmitButton } from "@/components/buttons";
 import { Flash, Masthead } from "@/components/frame";
 import { InstallHint } from "@/components/install-hint";
+import { SquareUpList } from "@/components/square-up";
 import { getDb } from "@/db";
 import { type ActivityItem, recentActivity } from "@/domain/activity";
 import { listChores } from "@/domain/chores";
 import { openDisputes } from "@/domain/disputes";
 import { houseBalances } from "@/domain/ledger";
 import { debtsForUser, houseSquareUp } from "@/domain/settleup";
+import { DONE_OPENS_MS } from "@/domain/turns";
 import { disputableTurnIds, houseTurns, type TurnView } from "@/domain/views";
-import { requireMember } from "@/lib/current";
+import { baseUrl, requireMember } from "@/lib/current";
 import { ago, dateLabel, dueLabel, signedCents } from "@/lib/format";
 import { feeCents, formatCents } from "@/money";
 import { inboundIsOff } from "@/providers";
@@ -153,6 +154,7 @@ export default async function HousePage({ searchParams }: Props) {
   const open = turns.filter((t) => t.status === "open");
   const others = turns.filter((t) => t.status === "assigned" && t.assigneeMemberId !== member.id);
   const potTotal = balances.reduce((sum, b) => sum + b.balanceCents, 0);
+  const inviteUrl = `${await baseUrl()}/join/${house.inviteCode}`;
 
   return (
     <main className="shell">
@@ -166,6 +168,17 @@ export default async function HousePage({ searchParams }: Props) {
             Add a bill
           </Link>
         </p>
+      )}
+
+      {balances.length < 2 && (
+        <section className="callout">
+          <h2>Invite your housemates</h2>
+          <p>Drop this link in the house chat. They open it, sign in, and they are in.</p>
+          <div className="invite">
+            <input className="input" readOnly value={inviteUrl} aria-label="Invite link" />
+            <ShareLink url={inviteUrl} houseName={house.name} />
+          </div>
+        </section>
       )}
 
       {iOwe.length > 0 && (
@@ -252,10 +265,17 @@ export default async function HousePage({ searchParams }: Props) {
                   {turn.bountyCents > 0 && " · a bounty is waiting if you do it on time"}
                 </p>
                 <div className="actions">
-                  <form action={doneAction}>
-                    <input type="hidden" name="turnId" value={turn.id} />
-                    <PhotoSubmit label="Done" />
-                  </form>
+                  {turn.dueAt.getTime() - now.getTime() > DONE_OPENS_MS ? (
+                    <p className="small muted">
+                      You can mark it done from{" "}
+                      {midSentence(dueLabel(new Date(turn.dueAt.getTime() - DONE_OPENS_MS), now, house.tz))}.
+                    </p>
+                  ) : (
+                    <form action={doneAction}>
+                      <input type="hidden" name="turnId" value={turn.id} />
+                      <PhotoSubmit label="Done" />
+                    </form>
+                  )}
                   <form action={skipAction}>
                     <input type="hidden" name="turnId" value={turn.id} />
                     <SubmitButton pendingLabel="Skipping…">
@@ -368,37 +388,13 @@ export default async function HousePage({ searchParams }: Props) {
         <section className="section">
           <h2 className="label">To square up</h2>
           {squareLines.length === 0 ? (
-            <p className="empty">Everyone is square.</p>
+            <p className="empty">
+              {iOwe.length + owedToMe.length > 0
+                ? "Nothing new since the last settle-up. Open payments are on the Settle up page."
+                : "Everyone is square."}
+            </p>
           ) : (
-            squareLines.map((l) => (
-              <div key={`${l.fromMemberId}-${l.toMemberId}`} className="row">
-                <span>
-                  {l.fromMemberId === member.id
-                    ? `You pay ${l.toName}`
-                    : l.toMemberId === member.id
-                      ? `${l.fromName} pays you`
-                      : `${l.fromName} pays ${l.toName}`}
-                </span>
-                <span className="leader" />
-                <span
-                  className={`amt ${l.fromMemberId === member.id ? "loss" : l.toMemberId === member.id ? "gain" : ""}`}
-                >
-                  {formatCents(l.amountCents)}
-                </span>
-                {isActive && involvesMe(l) && (
-                  <form action={settleWithAction} className="row-action">
-                    <input
-                      type="hidden"
-                      name="otherMemberId"
-                      value={l.fromMemberId === member.id ? l.toMemberId : l.fromMemberId}
-                    />
-                    <SubmitButton className="btn btn-small" pendingLabel="…">
-                      Settle
-                    </SubmitButton>
-                  </form>
-                )}
-              </div>
-            ))
+            <SquareUpList lines={squareLines} meId={member.id} canAct={isActive} />
           )}
           {squareUp.unclaimedCents > 0 && (
             <p className="small muted" style={{ marginTop: "var(--space-3)" }}>
@@ -409,13 +405,13 @@ export default async function HousePage({ searchParams }: Props) {
             <>
               <form action={settleNowAction} style={{ marginTop: "var(--space-4)" }}>
                 <SubmitButton className="btn btn-accent btn-block" pendingLabel="Settling up…">
-                  Settle everyone up
+                  Request all payments
                 </SubmitButton>
               </form>
               <p className="small muted" style={{ marginTop: "var(--space-3)" }}>
-                "Settle" on a line is just between you and that person. "Settle everyone up" turns the whole
-                list into payments and locks the bills behind it; otherwise that happens by itself on{" "}
-                {dateLabel(house.settlementDate)}.
+                Pay or Request on a line is just between you and that person. "Request all payments" asks
+                everyone on the list to pay now and locks the bills behind it; otherwise that happens by
+                itself on {dateLabel(house.settlementDate)}.
               </p>
             </>
           )}
