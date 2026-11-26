@@ -106,8 +106,8 @@ export default async function FrontPage({ searchParams }: Props) {
             <div>
               <strong>Square up by e-Transfer.</strong>
               <span>
-                One running balance each, turned into the fewest payments. Pay a housemate any time, or all at
-                once each month.
+                One running balance each, turned into the fewest payments. Pay a housemate whenever you are
+                ready.
               </span>
             </div>
           </li>

@@ -38,22 +38,22 @@ Housepot is a website, but it can sit on a phone's home screen like an app: on a
 
 Each house picks one when it is created. The chore rules above are the same in both.
 
-|           | **e-Transfer** (the default)                                                                | **Card deposits** (the original design)                                        |
-| --------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| Paying in | Nobody pays in. Everyone starts at $0.                                                      | A deposit by card, held by the app.                                            |
-| Skipping  | Always allowed; your score can go below zero.                                               | Only with enough balance.                                                      |
-| Settling  | On the 1st of each month the scores become a few "A pays B" e-Transfers between housemates. | Cash-out at the end of term: card refunds, plus e-Transfers from the operator. |
-| Cost      | Free. No money touches the app.                                                             | Card fees on every deposit.                                                    |
-| Bills     | Yes.                                                                                        | No.                                                                            |
-| Needs     | A way to send sign-in codes (email or texts).                                               | The same, plus Stripe and the legal check on holding money (see Going live).   |
+|           | **e-Transfer** (the default)                                                             | **Card deposits** (the original design)                                        |
+| --------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Paying in | Nobody pays in. Everyone starts at $0.                                                   | A deposit by card, held by the app.                                            |
+| Skipping  | Always allowed; your score can go below zero.                                            | Only with enough balance.                                                      |
+| Settling  | Whenever housemates choose: the scores become a few "A pays B" e-Transfers between them. | Cash-out at the end of term: card refunds, plus e-Transfers from the operator. |
+| Cost      | Free. No money touches the app.                                                          | Card fees on every deposit.                                                    |
+| Bills     | Yes.                                                                                     | No.                                                                            |
+| Needs     | A way to send sign-in codes (email or texts).                                            | The same, plus Stripe and the legal check on holding money (see Going live).   |
 
 ### How settling up works (e-Transfer houses)
 
-1. On the 1st (or when someone leaves, or any housemate presses **Settle everyone up** on the House page), unclaimed bounties are shared out and the scores become the fewest possible payments, at most one fewer than the number of people.
+1. Nothing is settled on a date: housemates settle when they choose to. When someone leaves, or any housemate presses **Request all payments** on the House page, unclaimed bounties are shared out and the scores become the fewest possible payments, at most one fewer than the number of people.
 2. Each payment has a code like `HP-7K3Q`. Both people get a text and see it on `/settle`.
 3. The person owed can send an Interac **money request**. Once Housepot sees it, the payer's **Pay** button opens that request, and their bank shows it already filled in. Otherwise the payer gets copy buttons for the email and code, and an "Open my bank" shortcut.
 4. The payer sends the e-Transfer and presses **I've paid**. That marks it paid and tells the other person; nobody has to confirm. The person owed can also press **Mark as paid**. With automatic checking on, the code in the e-Transfer message lets Interac's "you got money" email mark it paid with nobody tapping anything.
-5. Two housemates can also settle just between themselves at any time, with **Settle** next to that person in "To square up". It creates one payment, leaves everyone else alone and does not lock any bills.
+5. Two housemates can also settle just between themselves at any time, with **Pay** or **Request** next to that person in "To square up". It creates one payment, leaves everyone else alone and does not lock any bills.
 6. A reminder after a day, another when it is overdue (3 days). Someone with an overdue payment cannot claim bounties until it is paid.
 
 There is no public way to open a bank's e-Transfer form already filled in, and Interac's API is only for registered businesses, at a fee per transfer. The request link is the closest free thing.
@@ -163,7 +163,7 @@ src/domain/      the rules, as plain functions that take a database and a time
   disputes.ts    raising and voting
   tick.ts        the scheduler's heartbeat
   settlement.ts  cash-out, leaving, end of term
-  settleup.ts    e-Transfer houses: monthly settle-up, debts, reminders, the live "to square up" list
+  settleup.ts    e-Transfer houses: settling up (one person or the whole house), debts, reminders, the live "to square up" list
   split.ts       who owes what on a bill (plain arithmetic, also used by the form's preview)
   bills.ts       shared bills: add, edit, delete, and their ledger entries
   inbound.ts     forwarded Interac emails: matching payments and money requests

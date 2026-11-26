@@ -69,7 +69,7 @@ export default async function SettingsPage({ searchParams }: Props) {
         </div>
         <p className="small muted" style={{ marginTop: "var(--space-2)" }}>
           {etransfer
-            ? "Drop this in the house chat. Nobody pays anything to join: housemates settle up with each other once a month."
+            ? "Drop this in the house chat. Nobody pays anything to join: housemates pay each other by e-Transfer when they are ready."
             : `Drop this in the house chat. Each person pays the ${formatCents(house.depositCents)} deposit to join the rotation.`}
         </p>
       </section>
@@ -199,10 +199,10 @@ export default async function SettingsPage({ searchParams }: Props) {
         {etransfer ? (
           <div className="setting">
             <div>
-              <h3>Settle up early</h3>
+              <h3>Settling up</h3>
               <p>
-                The house settles up by itself on {dateLabel(house.settlementDate)}. Any housemate can do it
-                sooner from the House page: "Settle" next to a person, or "Settle everyone up".
+                Nothing is settled automatically. On the House page, press Pay or Request next to a person, or
+                "Request all payments" for the whole house.
               </p>
             </div>
           </div>
