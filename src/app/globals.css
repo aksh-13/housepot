@@ -694,6 +694,17 @@ details.editor .body {
   line-height: 1.6;
 }
 
+/* A small button at the end of a row, such as "Settle" next to one person in To square up. */
+.row .row-action {
+  margin-left: var(--space-3);
+}
+
+.btn.btn-small {
+  min-height: 2rem;
+  padding: 0 var(--space-3);
+  font-size: var(--text-sm);
+}
+
 /* The live "each person pays" preview sits between the bill form's fields and its button. */
 form > .receipt {
   margin-bottom: var(--space-5);

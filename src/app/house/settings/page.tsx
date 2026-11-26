@@ -201,7 +201,7 @@ export default async function SettingsPage({ searchParams }: Props) {
               <h3>Settle up early</h3>
               <p>
                 The house settles up by itself on {dateLabel(house.settlementDate)}. Any housemate can do it
-                sooner with "Settle up now" on the House page.
+                sooner from the House page: "Settle" next to a person, or "Settle everyone up".
               </p>
             </div>
           </div>

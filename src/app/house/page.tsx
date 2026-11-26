@@ -5,6 +5,7 @@ import {
   doneAction,
   payAction,
   settleNowAction,
+  settleWithAction,
   skipAction,
   voteAction,
 } from "@/app/actions";
@@ -86,6 +87,10 @@ function describe(item: ActivityItem, meId: string): { text: string; cents?: num
             : `The house settled up: ${n} e-Transfer${n === 1 ? "" : "s"} to send`,
       };
     }
+    case "settled_pair":
+      return {
+        text: `${item.data.fromName} and ${item.data.toName} settled up: ${formatCents(amount)} to send`,
+      };
     case "debt_sent":
       return { text: `${who} sent ${item.data.toName} ${formatCents(amount)}` };
     case "debt_paid":
@@ -370,6 +375,18 @@ export default async function HousePage({ searchParams }: Props) {
                 >
                   {formatCents(l.amountCents)}
                 </span>
+                {isActive && involvesMe(l) && (
+                  <form action={settleWithAction} className="row-action">
+                    <input
+                      type="hidden"
+                      name="otherMemberId"
+                      value={l.fromMemberId === member.id ? l.toMemberId : l.fromMemberId}
+                    />
+                    <SubmitButton className="btn btn-small" pendingLabel="…">
+                      Settle
+                    </SubmitButton>
+                  </form>
+                )}
               </div>
             ))
           )}
@@ -382,12 +399,13 @@ export default async function HousePage({ searchParams }: Props) {
             <>
               <form action={settleNowAction} style={{ marginTop: "var(--space-4)" }}>
                 <SubmitButton className="btn btn-accent btn-block" pendingLabel="Settling up…">
-                  Settle up now
+                  Settle everyone up
                 </SubmitButton>
               </form>
               <p className="small muted" style={{ marginTop: "var(--space-3)" }}>
-                This turns the list above into payments for the whole house and locks the bills behind it.
-                Otherwise it happens by itself on {dateLabel(house.settlementDate)}.
+                "Settle" on a line is just between you and that person. "Settle everyone up" turns the whole
+                list into payments and locks the bills behind it; otherwise that happens by itself on{" "}
+                {dateLabel(house.settlementDate)}.
               </p>
             </>
           )}

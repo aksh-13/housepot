@@ -27,6 +27,7 @@ import {
   markDebtSent,
   settleUpHouse,
   settleUpNow,
+  settleUpWith,
   textDebtPaid,
   textNewDebts,
 } from "@/domain/settleup";
@@ -463,6 +464,20 @@ export async function settleNowAction(): Promise<void> {
   if (!settled.ok) back("/house", "error", settled.error);
   await textNewDebts(getDb(), getProviders().sms, settled.debts, `${await baseUrl()}/settle`);
   back("/settle", "notice", "Settled up. Here is who pays whom.");
+}
+
+/** "Settle" on one line of the To square up list: just the two people on it, right now. */
+export async function settleWithAction(fd: FormData): Promise<void> {
+  const { member, house } = await requireMember("/house");
+  const settled = await settleUpWith(getDb(), {
+    houseId: house.id,
+    memberId: member.id,
+    otherMemberId: str(fd, "otherMemberId"),
+    now: new Date(),
+  });
+  if (!settled.ok) back("/house", "error", settled.error);
+  await textNewDebts(getDb(), getProviders().sms, [settled.debt], `${await baseUrl()}/settle`);
+  back("/settle", "notice", "Settled up. Here is the payment.");
 }
 
 /** Either person on a debt says it is paid. Nobody has to confirm. */

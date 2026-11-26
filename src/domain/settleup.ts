@@ -71,6 +71,58 @@ export async function settleUpNow(
   return { ok: true, debts: await settleUpHouse(db, { houseId: a.houseId, now: a.now, reason: "early" }) };
 }
 
+/**
+ * Two housemates settle what is between them, right now, without waiting for the house. It takes
+ * the one line from the "To square up" list that joins them and turns it into a payment. Everyone
+ * else's balance stays as it is, bills stay editable, and the monthly settle-up is not moved:
+ * a later change to a bill simply shows up as a new amount to square up.
+ */
+export async function settleUpWith(
+  db: Db,
+  a: { houseId: string; memberId: string; otherMemberId: string; now: Date },
+): Promise<{ ok: true; debt: CreatedDebt } | Fail> {
+  const house = await getHouse(db, a.houseId);
+  if (!house || house.moneyMode !== "etransfer") {
+    return { ok: false, error: "Only houses that settle up by e-Transfer can do this." };
+  }
+  return db.tx(async (t) => {
+    await t.query("select pg_advisory_xact_lock(hashtext($1))", [`house:${a.houseId}`]);
+    const active = (await activeMembers(t, a.houseId)).map((m) => m.id);
+    if (a.memberId === a.otherMemberId || !active.includes(a.memberId) || !active.includes(a.otherMemberId)) {
+      return { ok: false as const, error: "Only housemates can settle up." };
+    }
+    const pair = [a.memberId, a.otherMemberId];
+    const line = (await houseSquareUp(t, a.houseId)).lines.find(
+      (l) => pair.includes(l.fromMemberId) && pair.includes(l.toMemberId),
+    );
+    if (!line) return { ok: false as const, error: "There is nothing to settle between you two right now." };
+
+    const payment = {
+      fromMemberId: line.fromMemberId,
+      toMemberId: line.toMemberId,
+      amountCents: line.amountCents,
+    };
+    const debt = await insertDebt(t, a.houseId, payment, new Date(a.now.getTime() + PAY_WITHIN_MS), a.now);
+    // As in a house settle-up: the score moves now, and the debt row stands for the real money.
+    await transfer(t, {
+      houseId: a.houseId,
+      from: { memberId: line.toMemberId },
+      to: { memberId: line.fromMemberId },
+      amountCents: line.amountCents,
+      kind: "settle_up",
+      ref: `settle:${debt.id}`,
+    });
+    await logActivity(t, {
+      houseId: a.houseId,
+      memberId: a.memberId,
+      kind: "settled_pair",
+      data: { fromName: line.fromName, toName: line.toName, amountCents: line.amountCents },
+      now: a.now,
+    });
+    return { ok: true as const, debt };
+  });
+}
+
 export type SquareUpLine = Payment & { fromName: string; toName: string };
 
 /**
