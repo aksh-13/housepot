@@ -425,6 +425,16 @@ async function send(sms: Sms, to: string, body: string): Promise<void> {
   }
 }
 
+/**
+ * The sentence that says where the money goes. The e-Transfer email is in the message itself, so
+ * the person can pay from their bank without opening Housepot first.
+ */
+export function howToPay(toName: string, toEmail: string | null, code: string): string {
+  return toEmail
+    ? `Send an e-Transfer to ${toEmail} and put ${code} in the message.`
+    : `${toName} has not added an e-Transfer email yet, so ask where to send it. Put ${code} in the message.`;
+}
+
 /** Tells both sides of each new debt what to do. */
 export async function textNewDebts(db: Db, sms: Sms, debts: CreatedDebt[], link: string): Promise<void> {
   for (const created of debts) {
@@ -434,16 +444,16 @@ export async function textNewDebts(db: Db, sms: Sms, debts: CreatedDebt[], link:
     await send(
       sms,
       d.fromContact,
-      `Housepot settle-up: you owe ${d.toName} ${amount}. Pay by e-Transfer and put ${d.code} in the message: ${link}`,
+      `You owe ${d.toName} ${amount}. ${howToPay(d.toName, d.toEmail, d.code)} ${link}`,
     );
     await send(
       sms,
       d.toContact,
       inboundMode() === "off"
-        ? `Housepot settle-up: ${d.fromName} owes you ${amount}. ${link}`
+        ? `${d.fromName} owes you ${amount} and has been asked to pay. ${link}`
         : d.toEmail
-          ? `Housepot settle-up: ${d.fromName} owes you ${amount}. Send them an Interac request to make it one tap: ${link}`
-          : `Housepot settle-up: ${d.fromName} owes you ${amount}. Add your e-Transfer email so they can pay you: ${link}`,
+          ? `${d.fromName} owes you ${amount}. Send them an Interac request to make it one tap: ${link}`
+          : `${d.fromName} owes you ${amount}. Add your e-Transfer email so they can pay you: ${link}`,
     );
   }
 }

@@ -366,7 +366,7 @@ test("settling up by hand still texts both sides and does not stop the house", a
   const toA = sent.filter((t) => t.to_phone === house.members[0].phone).map((t) => t.body);
   const toB = sent.filter((t) => t.to_phone === house.members[1].phone).map((t) => t.body);
   expect(
-    toA.some((body) => /you owe Ben \$5\. .*HP-[A-Z0-9]{4}.*https:\/\/housepot\.test\/settle/.test(body)),
+    toA.some((body) => /You owe Ben \$5\. .*HP-[A-Z0-9]{4}.*https:\/\/housepot\.test\/settle/.test(body)),
   ).toBe(true);
   expect(toB.some((body) => body.includes("Ana owes you $5"))).toBe(true);
   // Members stay active: nobody has to pay back in, unlike a card house.
@@ -445,7 +445,7 @@ test("with Interac checking off, the settle-up text does not mention an Interac 
     delete process.env.INBOUND_EMAIL_PROVIDER;
   }
   const toBen = (await texts()).filter((t) => t.to_phone === house.members[1].phone).map((t) => t.body);
-  expect(toBen).toEqual(["Housepot settle-up: Ana owes you $5. https://housepot.test/settle"]);
+  expect(toBen).toEqual(["Ana owes you $5 and has been asked to pay. https://housepot.test/settle"]);
 });
 
 test("with Interac checking off, the 'sent' text does not promise automatic checking", async () => {
@@ -640,4 +640,44 @@ test("the 'paid' message to the payer is about that one payment, not their whole
   await textDebtPaid(sms, paid.debt, "https://housepot.test/settle");
   const toAna = (await texts()).filter((t) => t.to_phone === house.members[0].phone).map((t) => t.body);
   expect(toAna).toEqual(["Ben got your $5. That payment is done. https://housepot.test/settle"]);
+});
+
+describe("where to send the money is in the message itself", () => {
+  const toAna = async () =>
+    (await texts()).filter((t) => t.to_phone === house.members[0].phone).map((t) => t.body);
+  const ask = async () => {
+    await aSkipsBClaims();
+    const debts = await settleUpHouse(db, { houseId: house.houseId, now: DEC_1, reason: "early" });
+    await db.query("delete from sms_outbox");
+    return debts;
+  };
+
+  test("a payment request names the other person's e-Transfer email", async () => {
+    await db.query("update members set etransfer_email = 'ben@example.com' where id = $1", [b]);
+    const created = await ask();
+    await textNewDebts(db, sms, created, "https://housepot.test/settle");
+    expect(await toAna()).toEqual([
+      `You owe Ben $5. Send an e-Transfer to ben@example.com and put ${created[0].code} in the message. https://housepot.test/settle`,
+    ]);
+  });
+
+  test("when they have not added one yet, the request says so", async () => {
+    const created = await ask();
+    await textNewDebts(db, sms, created, "https://housepot.test/settle");
+    expect(await toAna()).toEqual([
+      `You owe Ben $5. Ben has not added an e-Transfer email yet, so ask where to send it. Put ${created[0].code} in the message. https://housepot.test/settle`,
+    ]);
+  });
+
+  test("reminders name the e-Transfer email too", async () => {
+    await db.query("update members set etransfer_email = 'ben@example.com' where id = $1", [b]);
+    const created = await ask();
+    const code = created[0].code;
+    await runTick(db, { sms, payments }, plus(DEC_1, 25 * HOUR), "https://housepot.test");
+    await runTick(db, { sms, payments }, plus(DEC_1, PAY_WITHIN_MS + HOUR), "https://housepot.test");
+    expect((await toAna()).filter((body) => /owe|overdue/.test(body))).toEqual([
+      `You still owe Ben $5. Send an e-Transfer to ben@example.com and put ${code} in the message. https://housepot.test/settle`,
+      `Your $5 to Ben is overdue. You cannot win chore money until it is paid. Send an e-Transfer to ben@example.com and put ${code} in the message. https://housepot.test/settle`,
+    ]);
+  });
 });

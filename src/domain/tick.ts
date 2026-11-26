@@ -10,7 +10,7 @@ import { activeMembers, HOUSE_COLUMNS, type House, type Member } from "./houses"
 import { choreBounty, memberBalance } from "./ledger";
 import { applyPaymentEvent } from "./payments";
 import { settleHouse } from "./settlement";
-import { FIRST_REMINDER_MS } from "./settleup";
+import { FIRST_REMINDER_MS, howToPay } from "./settleup";
 import { missTurn } from "./turns";
 
 const TICK_LOCK_KEY = 4827002;
@@ -202,10 +202,12 @@ async function remindDebts(ctx: Ctx, house: House): Promise<void> {
     code: string;
     from_contact: string;
     to_name: string;
+    to_email: string | null;
     overdue: boolean;
   }>(
     `select d.id, d.reminders, d.amount_cents, d.code, coalesce(fu.email, fu.phone) as from_contact,
-            coalesce(tu.name, 'Housemate') as to_name, d.due_at <= $2 as overdue
+            coalesce(tu.name, 'Housemate') as to_name, tm.etransfer_email as to_email,
+            d.due_at <= $2 as overdue
      from debts d
      join members fm on fm.id = d.from_member_id join users fu on fu.id = fm.user_id
      join members tm on tm.id = d.to_member_id join users tu on tu.id = tm.user_id
@@ -225,8 +227,8 @@ async function remindDebts(ctx: Ctx, house: House): Promise<void> {
       ctx,
       d.from_contact,
       d.overdue
-        ? `Your ${amount} to ${d.to_name} is overdue. You cannot win chore money until it is paid. Put ${d.code} in the e-Transfer message: ${ctx.settleLink}`
-        : `Reminder: you owe ${d.to_name} ${amount}. Put ${d.code} in the e-Transfer message: ${ctx.settleLink}`,
+        ? `Your ${amount} to ${d.to_name} is overdue. You cannot win chore money until it is paid. ${howToPay(d.to_name, d.to_email, d.code)} ${ctx.settleLink}`
+        : `You still owe ${d.to_name} ${amount}. ${howToPay(d.to_name, d.to_email, d.code)} ${ctx.settleLink}`,
     );
     ctx.summary.debtReminders += 1;
   }
