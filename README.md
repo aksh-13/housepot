@@ -7,7 +7,7 @@ Built for student houses, where everyone knows whose turn it is and nobody does 
 ## The rules
 
 1. Each housemate pays a deposit (default $20) by card. That is their balance.
-2. Chores rotate through the housemates who have paid in.
+2. Chores rotate through the housemates. Whoever adds a chore picks who takes the first turn (anyone in the house); after that it goes round in order.
 3. On your turn you either do it and send a photo, or pay the skip price (default $5) before the deadline.
 4. Miss the deadline and the skip price is taken from your balance anyway. A balance can go below zero.
 5. A skipped or missed chore is open to the whole house. The first person to do it, with a photo, takes the money. That includes the person who missed it.

@@ -101,6 +101,8 @@ type CreateArgs = {
   schedule: Schedule;
   deadlineTime: string;
   skipPriceCents?: number;
+  /** Who takes the first turn. Any active housemate; the person adding the chore if not given. */
+  firstMemberId?: string;
   now: Date;
 };
 
@@ -113,19 +115,24 @@ export async function createChore(db: Db, a: CreateArgs): Promise<{ ok: true; ch
   if (!member || member.houseId !== a.houseId || member.status !== "active") {
     return { ok: false, error: "Only housemates who have paid in can add chores." };
   }
+  // Anyone can hand a new chore to anyone: the adder is only the default.
+  const first = a.firstMemberId ? await memberById(db, a.firstMemberId) : member;
+  if (!first || first.houseId !== a.houseId || first.status !== "active") {
+    return { ok: false, error: "Pick a housemate to go first." };
+  }
   const name = a.name.trim().slice(0, 60);
   return db.tx(async (t) => {
     const { rows } = await t.query<{ id: string }>(
       `insert into chores (house_id, name, schedule_kind, weekday, every_n, anchor_date, deadline_time,
-         skip_price_cents, created_at)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning id`,
-      [a.houseId, name, ...scheduleColumns(a.schedule), a.deadlineTime, skipPriceCents, a.now],
+         skip_price_cents, first_member_id, created_at)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning id`,
+      [a.houseId, name, ...scheduleColumns(a.schedule), a.deadlineTime, skipPriceCents, first.id, a.now],
     );
     await logActivity(t, {
       houseId: a.houseId,
       memberId: a.memberId,
       kind: "chore_added",
-      data: { name },
+      data: first.id === a.memberId ? { name } : { name, firstName: first.name },
       now: a.now,
     });
     return { ok: true as const, choreId: rows[0].id };
@@ -195,7 +202,8 @@ export async function updateChore(db: Db, a: UpdateArgs): Promise<{ ok: true } |
 
 /**
  * Makes sure every chore has a turn waiting, and returns how many were created.
- * The turn goes to the next paid-up housemate after whoever had it last.
+ * The first turn goes to whoever was picked when the chore was added; after that, to the next
+ * paid-up housemate after whoever had it last.
  * Cancelled turns do not count, so a pause or an edit does not skip anyone.
  */
 export async function ensureTurns(db: Db, houseId: string, now: Date): Promise<number> {
@@ -205,6 +213,11 @@ export async function ensureTurns(db: Db, houseId: string, now: Date): Promise<n
   if (members.length === 0) return 0;
 
   let created = 0;
+  const firsts = await db.query<{ id: string; first_member_id: string | null }>(
+    "select id, first_member_id from chores where house_id = $1 and not archived",
+    [houseId],
+  );
+  const firstOf = new Map(firsts.rows.map((r) => [r.id, r.first_member_id]));
   for (const chore of await listChores(db, houseId)) {
     const waiting = await db.query("select 1 from turns where chore_id = $1 and status = 'assigned'", [
       chore.id,
@@ -220,7 +233,9 @@ export async function ensureTurns(db: Db, houseId: string, now: Date): Promise<n
     const previous = last.rows[0];
     const after = previous && previous.due_at.getTime() > now.getTime() ? previous.due_at : now;
     const dueAt = nextDueAt(chore.schedule, chore.deadlineTime, house.tz, after);
-    const assignee = (previous && members.find((m) => m.rotationPosition > previous.position)) ?? members[0];
+    const picked = previous ? undefined : members.find((m) => m.id === firstOf.get(chore.id));
+    const assignee =
+      picked ?? (previous && members.find((m) => m.rotationPosition > previous.position)) ?? members[0];
 
     const inserted = await db.query(
       `insert into turns (chore_id, house_id, assignee_member_id, due_at, created_at)

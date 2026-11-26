@@ -48,7 +48,11 @@ function describe(item: ActivityItem, meId: string): { text: string; cents?: num
     case "auto_reload_failed":
       return { text: `${who === "You" ? "Your" : `${who}'s`} card was declined` };
     case "chore_added":
-      return { text: `${who} added ${item.data.name}` };
+      return {
+        text: item.data.firstName
+          ? `${who} added ${item.data.name}, starting with ${item.data.firstName}`
+          : `${who} added ${item.data.name}`,
+      };
     case "chore_updated":
       return { text: `${who} edited ${item.data.name}` };
     case "chore_archived":
