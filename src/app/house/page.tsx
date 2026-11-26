@@ -75,8 +75,16 @@ function describe(item: ActivityItem, meId: string): { text: string; cents?: num
       return { text: "The pot was cashed out and restarted" };
     case "bill_added":
       return { text: `${who} added ${item.data.description} (${formatCents(Number(item.data.totalCents))})` };
-    case "bill_edited":
-      return { text: `${who} changed ${item.data.description}` };
+    case "bill_edited": {
+      const before = Number(item.data.previousTotalCents ?? 0);
+      const after = Number(item.data.totalCents ?? 0);
+      return {
+        text:
+          before && before !== after
+            ? `${who} changed ${item.data.description}: ${formatCents(before)} → ${formatCents(after)}`
+            : `${who} changed ${item.data.description}`,
+      };
+    }
     case "bill_deleted":
       return { text: `${who} deleted ${item.data.description}` };
     case "settled_up": {

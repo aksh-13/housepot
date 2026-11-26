@@ -142,3 +142,10 @@ test("money is shown without cents when it is a whole dollar amount", () => {
   expect(formatCents(-500)).toBe("-$5");
   expect(formatCents(0)).toBe("$0");
 });
+
+test("large amounts are written with thousands separators", () => {
+  expect(formatCents(999_999)).toBe("$9,999.99");
+  expect(formatCents(100_000)).toBe("$1,000");
+  expect(formatCents(-123_456_78)).toBe("-$123,456.78");
+  expect(formatCents(99_999)).toBe("$999.99");
+});

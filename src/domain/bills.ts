@@ -249,7 +249,12 @@ export async function editBill(db: Db, a: EditArgs): Promise<{ ok: true } | Fail
       houseId: bill.houseId,
       memberId: a.actorMemberId,
       kind: "bill_edited",
-      data: { billId: bill.id, description: checked.description, totalCents: a.input.totalCents },
+      data: {
+        billId: bill.id,
+        description: checked.description,
+        totalCents: a.input.totalCents,
+        previousTotalCents: bill.totalCents,
+      },
       now: a.now,
     });
     return { ok: true as const };

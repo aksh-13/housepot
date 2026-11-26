@@ -296,7 +296,8 @@ test("every outcome is written to the activity feed", async () => {
   await claimBounty(db, { turnId: first.id, memberId: b, photoId: await photo(b), now: NOW });
   await ensureTurns(db, house.houseId, NOW);
   const second = await waitingTurn();
-  await markDone(db, { turnId: second.id, memberId: b, photoId: await photo(b), now: NOW });
+  // The second turn is next week's, so it is done next week: a turn opens two days before its deadline.
+  await markDone(db, { turnId: second.id, memberId: b, photoId: await photo(b), now: NEXT_WEEK });
   await ensureTurns(db, house.houseId, NEXT_WEEK);
   const third = await waitingTurn();
   await missTurn(db, { turnId: third.id, now: new Date("2026-11-27T02:00:01Z") });
@@ -351,4 +352,29 @@ test("a photo from someone outside the house is refused", async () => {
     now: NOW,
   });
   expect(r.ok).toBe(false);
+});
+
+// Found by a tester: next week's turn could be marked done today, and it collected the money
+// waiting on tonight's still-open chore with the same photo.
+test("a turn cannot be marked done more than two days before its deadline", async () => {
+  const turn = (await db.query("select id, due_at from turns where status = 'assigned'")).rows[0];
+  const threeDaysEarly = new Date(turn.due_at.getTime() - 3 * 24 * 60 * 60_000);
+  const early = await markDone(db, {
+    turnId: turn.id,
+    memberId: a,
+    photoId: await photo(a),
+    now: threeDaysEarly,
+  });
+  expect(early).toEqual({
+    ok: false,
+    error: "This is not due yet. You can mark it done from two days before the deadline.",
+  });
+  expect((await db.query("select status from turns where id = $1", [turn.id])).rows[0].status).toBe(
+    "assigned",
+  );
+
+  const dayBefore = new Date(turn.due_at.getTime() - 24 * 60 * 60_000);
+  expect(
+    (await markDone(db, { turnId: turn.id, memberId: a, photoId: await photo(a), now: dayBefore })).ok,
+  ).toBe(true);
 });

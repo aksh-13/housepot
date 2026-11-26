@@ -1,4 +1,5 @@
 import { DateTime } from "luxon";
+import { dollars } from "@/money";
 
 /** "Today, 9:00 PM", "Tomorrow, 9:00 PM", "Thu Nov 19, 9:00 PM" in the house's time zone. */
 export function dueLabel(due: Date, now: Date, tz: string): string {
@@ -38,9 +39,7 @@ export function scheduleLabel(
 /** "+$5", "−$5" (with a real minus sign), or "" for zero. */
 export function signedCents(cents: number): string {
   if (cents === 0) return "";
-  const abs = Math.abs(cents);
-  const dollars = abs % 100 === 0 ? String(abs / 100) : (abs / 100).toFixed(2);
-  return `${cents > 0 ? "+" : "−"}$${dollars}`;
+  return `${cents > 0 ? "+" : "−"}$${dollars(Math.abs(cents))}`;
 }
 
 /** "9:00 PM" from "21:00" */

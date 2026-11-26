@@ -477,6 +477,6 @@ export async function textDebtPaid(
     );
     return;
   }
-  await send(sms, d.fromContact, `${d.toName} got your ${amount}. You are square. ${link}`);
+  await send(sms, d.fromContact, `${d.toName} got your ${amount}. That payment is done. ${link}`);
   await send(sms, d.toContact, `${d.fromName}'s ${amount} arrived. Marked as paid. ${link}`);
 }

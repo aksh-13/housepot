@@ -604,3 +604,20 @@ describe("settleUpWith", () => {
     expect(await debts()).toEqual([]);
   });
 });
+
+// Found by a tester: someone who still owed another housemate was told "You are square".
+test("the 'paid' message to the payer is about that one payment, not their whole balance", async () => {
+  await aSkipsBClaims();
+  const [debt] = await settleUpHouse(db, { houseId: house.houseId, now: DEC_1, reason: "scheduled" });
+  const paid = await markDebtPaid(db, {
+    debtId: debt.id,
+    via: "manual",
+    userId: house.members[1].userId,
+    now: DEC_1,
+  });
+  if (!paid.ok) throw new Error(paid.error);
+  await db.query("delete from sms_outbox");
+  await textDebtPaid(sms, paid.debt, "https://housepot.test/settle");
+  const toAna = (await texts()).filter((t) => t.to_phone === house.members[0].phone).map((t) => t.body);
+  expect(toAna).toEqual(["Ben got your $5. That payment is done. https://housepot.test/settle"]);
+});
