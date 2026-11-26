@@ -38,6 +38,26 @@ export const inboundIsFake = (): boolean => inboundMode() === "fake";
 export const inboundIsOff = (): boolean => inboundMode() === "off";
 
 /**
+ * Builds each service the first time it is asked for, then keeps it. A service whose settings are
+ * missing must only break the feature that needs it: photo storage that is not set up yet is no
+ * reason for signing in to fail.
+ */
+function lazy<T extends object>(make: { [K in keyof T]: () => T[K] }): T {
+  const built: Partial<T> = {};
+  const out = {} as T;
+  for (const name of Object.keys(make) as (keyof T)[]) {
+    Object.defineProperty(out, name, {
+      enumerable: true,
+      get: () => {
+        if (!(name in built)) built[name] = make[name]();
+        return built[name];
+      },
+    });
+  }
+  return out;
+}
+
+/**
  * The outside services, chosen by environment variables. With nothing set, everything is fake:
  * texts land in the sms_outbox table, payments use a pretend checkout page, photos go to disk.
  */
@@ -53,8 +73,8 @@ export function getProviders(): Providers {
   const key = [smsKind, paymentsKind, storageKind, photoDir].join("|");
   if (cache.__housepotProviders?.key === key) return cache.__housepotProviders.providers;
 
-  const providers: Providers = {
-    sms:
+  const providers = lazy<Providers>({
+    sms: () =>
       smsKind === "twilio"
         ? twilioSms({
             TWILIO_ACCOUNT_SID: need("TWILIO_ACCOUNT_SID"),
@@ -72,14 +92,14 @@ export function getProviders(): Providers {
           : smsKind === "email-resend"
             ? resendEmail({ RESEND_API_KEY: need("RESEND_API_KEY"), EMAIL_FROM: need("EMAIL_FROM") })
             : fakeSms(getDb()),
-    payments:
+    payments: () =>
       paymentsKind === "stripe"
         ? stripePayments({
             STRIPE_SECRET_KEY: need("STRIPE_SECRET_KEY"),
             STRIPE_WEBHOOK_SECRET: need("STRIPE_WEBHOOK_SECRET"),
           })
         : fakePayments(),
-    storage:
+    storage: () =>
       storageKind === "s3"
         ? s3Storage({
             S3_ENDPOINT: process.env.S3_ENDPOINT,
@@ -89,7 +109,7 @@ export function getProviders(): Providers {
             S3_SECRET_ACCESS_KEY: need("S3_SECRET_ACCESS_KEY"),
           })
         : diskStorage(photoDir),
-  };
+  });
   cache.__housepotProviders = { key, providers };
   return providers;
 }
