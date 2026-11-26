@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import type { Db } from "@/db";
 
 /** Where photo files are kept. The content type lives in the database, next to the key. */
 export interface Storage {
@@ -28,6 +29,29 @@ export function diskStorage(dir: string): Storage {
         if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
         throw err;
       }
+    },
+  };
+}
+
+/**
+ * Keeps photos in the app's own database. Nothing else to set up, which suits a small deployment
+ * on a host with no disk (Vercel). Move to S3 or R2 when photos start to fill the database.
+ */
+export function dbStorage(db: Db): Storage {
+  return {
+    async put(key, bytes) {
+      await db.query(
+        `insert into photo_files (storage_key, bytes) values ($1, $2)
+         on conflict (storage_key) do update set bytes = excluded.bytes`,
+        [key, bytes],
+      );
+    },
+    async get(key) {
+      const { rows } = await db.query<{ bytes: Buffer }>(
+        "select bytes from photo_files where storage_key = $1",
+        [key],
+      );
+      return rows[0]?.bytes ?? null;
     },
   };
 }

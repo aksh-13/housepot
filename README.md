@@ -196,7 +196,7 @@ All rules live in `src/domain` and are tested without the web layer. If you chan
 | `TICK_SECRET`                        | Shared secret the scheduler sends to `/api/internal/tick`.                                                                                                                                |
 | `SMS_PROVIDER`                       | `fake` or `twilio`. With `twilio`: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`.                                                                                              |
 | `PAYMENTS_PROVIDER`                  | `fake` or `stripe`. With `stripe`: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`.                                                                                                          |
-| `STORAGE_PROVIDER`                   | `disk` or `s3`. With `s3`: `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`.                                                                           |
+| `STORAGE_PROVIDER`                   | `disk`, `db` (photos kept in the database, nothing else to set up) or `s3`. With `s3`: `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`.               |
 | `OPERATOR_PHONES`, `OPERATOR_EMAILS` | Comma-separated phone numbers and emails allowed to open `/operator`, the list of e-Transfers to send.                                                                                    |
 | `SIGN_IN`                            | `phone` (a texted code, the default) or `email` (an emailed code). Reminders go the same way.                                                                                             |
 | `EMAIL_PROVIDER`                     | Used when `SIGN_IN=email`. `fake` (saved to `/dev/outbox`), `smtp` (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`) or `resend` (`RESEND_API_KEY`). Both real ones need `EMAIL_FROM`. |
@@ -221,7 +221,7 @@ The app never holds money in this setup, so it needs no payment account. It has 
    - No domain yet: `EMAIL_PROVIDER=smtp` with a Gmail account and an app password (`SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=465`). The host must allow outgoing SMTP; Railway's Hobby plan does not.
    - With a domain: `EMAIL_PROVIDER=resend`, which works over HTTPS on any host.
 4. **`BASE_URL`** set to the public address, and **`OPERATOR_EMAILS`** set to your own.
-5. **Photo storage.** Any S3-compatible bucket (S3, Cloudflare R2), or `STORAGE_PROVIDER=disk` with a persistent disk and a single copy of the app.
+5. **Photo storage.** `STORAGE_PROVIDER=db` keeps photos in the database with nothing else to set up. For more volume use any S3-compatible bucket (S3, Cloudflare R2). `STORAGE_PROVIDER=disk` needs a persistent disk and a single copy of the app.
 6. **The tick.** Something must send `POST /api/internal/tick` with `Authorization: Bearer $TICK_SECRET` every five minutes. Without it no turns are handed out, no reminders go out and no settle-up happens. The Kubernetes manifests include a CronJob for it.
 7. **On Kubernetes:** any cluster with the nginx ingress controller and cert-manager. Put your domain in `k8s/overlays/prod/ingress.yaml` and `kustomization.yaml`, fill in `secret.env`, then `kubectl apply -k k8s/overlays/prod`. If the image on ghcr.io is private, create a pull secret named `ghcr-pull` in the `housepot` namespace (`kubectl create secret docker-registry ghcr-pull --docker-server=ghcr.io --docker-username=aksh-13 --docker-password=<a token with read:packages>`), or make the package public and delete that patch from the overlay.
 
@@ -229,7 +229,7 @@ The app never holds money in this setup, so it needs no payment account. It has 
 
 `vercel.json` runs the migrations before each build. They take a session lock, so they use `DATABASE_URL_UNPOOLED` (a direct connection, which the Neon integration provides) when it is set, and `DATABASE_URL` otherwise. The app itself should use a pooled `DATABASE_URL`.
 
-- Photos need `STORAGE_PROVIDER=s3`; there is no disk to save to.
+- Photos need `STORAGE_PROVIDER=db` (kept in the database) or `s3`; there is no disk to save to.
 - Vercel's own cron cannot call the tick on the Hobby plan (once a day at most, and it sends GET). Use an outside scheduler to send the POST every five minutes.
 - A request is capped at 4.5 MB, so a proof photo that could not be shrunk in the browser is rejected.
 
