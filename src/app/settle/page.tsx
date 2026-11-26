@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { debtPaidAction } from "@/app/actions";
 import { CopyButton, SubmitButton } from "@/components/buttons";
 import { Flash, Masthead } from "@/components/frame";
+import { LiveRefresh } from "@/components/live-refresh";
 import { SquareUpList } from "@/components/square-up";
 import { getDb } from "@/db";
 import { BANKS, getHouse, memberForUser } from "@/domain/houses";
@@ -202,6 +203,7 @@ export default async function SettlePage({ searchParams }: Props) {
   return (
     <main className="shell">
       {house ? <Masthead current="settle" settle /> : <Masthead />}
+      <LiveRefresh />
       <Flash params={await searchParams} />
       <h1 className="house-name">Settle up</h1>
       <p className="muted small" style={{ marginTop: "var(--space-2)" }}>

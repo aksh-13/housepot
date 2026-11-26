@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Flash, Masthead } from "@/components/frame";
+import { LiveRefresh } from "@/components/live-refresh";
 import { getDb } from "@/db";
 import { type BillView, houseBills } from "@/domain/bills";
 import { requireMember } from "@/lib/current";
@@ -29,6 +30,7 @@ export default async function BillsPage({ searchParams }: Props) {
   return (
     <main className="shell">
       <Masthead current="bills" settle />
+      <LiveRefresh />
       <Flash params={await searchParams} />
       <h1 className="house-name">Bills</h1>
       {member.status === "active" && (
