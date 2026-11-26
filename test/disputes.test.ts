@@ -249,7 +249,9 @@ test("a passed dispute on an on-time turn that collected a bonus takes the bonus
   await missTurn(db, { turnId: first, now: LATE }); // ids[0] misses: bounty 500
   await ensureTurns(db, house.houseId, LATE);
   const second = await waitingTurnId();
-  const doneAt = after(LATE, 24);
+  // Done the day before its own deadline: a turn opens two days before it is due.
+  const due = (await db.query("select due_at from turns where id = $1", [second])).rows[0].due_at as Date;
+  const doneAt = after(due, -24);
   await markDone(db, { turnId: second, memberId: ids[1], photoId: await photo(ids[1]), now: doneAt });
   expect(await memberBalance(db, ids[1])).toBe(2500);
 

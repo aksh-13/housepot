@@ -263,7 +263,7 @@ describe("the email webhook", () => {
     expect(await res.json()).toEqual({ outcome: "paid" });
     expect((await debtRow()).status).toBe("paid");
     const { rows } = await db.query(
-      "select to_phone, body from sms_outbox where body like '%square%' or body like '%arrived%'",
+      "select to_phone, body from sms_outbox where body like '%payment is done%' or body like '%arrived%'",
     );
     expect(rows.map((r) => r.to_phone).sort()).toEqual(
       [house.members[0].phone, house.members[1].phone].sort(),

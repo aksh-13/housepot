@@ -28,9 +28,10 @@ export default async function FrontPage({ searchParams }: Props) {
       <Flash params={await searchParams} />
 
       <section className="hero section">
-        <h1>Chores, with money on the line.</h1>
+        <h1>Chores and bills for your house, on one tab.</h1>
         <p className="lede">
-          Everyone in the house puts in $20. Skip your turn and $5 of it goes to whoever does the job.
+          Split the groceries, rotate the chores, and see exactly who owes whom. Skip your turn and $5 goes to
+          whoever does the job.
         </p>
         <div className="actions actions-one">
           <Link href="/new" className="btn btn-primary">
@@ -42,33 +43,32 @@ export default async function FrontPage({ searchParams }: Props) {
         </p>
 
         <figure className="receipt">
-          <figcaption className="visually-hidden">An example house pot</figcaption>
+          <figcaption className="visually-hidden">An example house</figcaption>
           <div className="title">
-            <span>The pot</span>
+            <span>This month</span>
             <span>12 Elm St</span>
           </div>
           <div className="row">
             <span>Akshaj</span>
             <span className="leader" />
-            <span className="amt">$25</span>
-            <span className="delta gain">+$5</span>
+            <span className="amt gain">+$47.60</span>
           </div>
           <div className="row">
             <span>Priya</span>
             <span className="leader" />
-            <span className="amt">$20</span>
-            <span className="delta" />
+            <span className="amt loss">−$19.80</span>
           </div>
           <div className="row">
             <span>Sam</span>
             <span className="leader" />
-            <span className="amt">$15</span>
-            <span className="delta loss">−$5</span>
+            <span className="amt loss">−$27.80</span>
           </div>
           <p className="note">
-            Thu 9:00 PM · Sam missed Garbage
+            Akshaj paid $67.80 for groceries, split by receipt
             <br />
-            Thu 9:40 PM · Akshaj did it, with a photo
+            Sam missed Garbage · Akshaj did it, with a photo
+            <br />
+            To square up: Sam pays Akshaj $27.80 · Priya pays Akshaj $19.80
           </p>
         </figure>
       </section>
@@ -78,31 +78,36 @@ export default async function FrontPage({ searchParams }: Props) {
         <ol className="steps">
           <li>
             <div>
-              <strong>Everyone pays in.</strong>
-              <span>One link in the house chat. Each housemate pays a deposit by card.</span>
+              <strong>One link in the house chat.</strong>
+              <span>
+                Everyone signs in with an emailed code. No app to install, no password, nothing to pay.
+              </span>
+            </div>
+          </li>
+          <li>
+            <div>
+              <strong>Add bills as they happen.</strong>
+              <span>
+                Split equally, or by receipt: say what each person had and the tax and tip are shared out
+                fairly.
+              </span>
             </div>
           </li>
           <li>
             <div>
               <strong>Chores take turns.</strong>
               <span>
-                Do yours and send a photo, or pay to skip it. Miss the deadline and you are charged.
+                Do yours and send a photo, or skip it for a price. A skipped or missed chore is open to the
+                house, and the first one to do it takes the money.
               </span>
             </div>
           </li>
           <li>
             <div>
-              <strong>Whoever does it gets paid.</strong>
+              <strong>Square up by e-Transfer.</strong>
               <span>
-                A skipped chore is open to the house. First one to do it, with a photo, takes the money.
-              </span>
-            </div>
-          </li>
-          <li>
-            <div>
-              <strong>Cash out at the end of term.</strong>
-              <span>
-                Do your chores and you get your whole deposit back. Cover for others and you get more.
+                One running balance each, turned into the fewest payments. Pay a housemate any time, or all at
+                once each month.
               </span>
             </div>
           </li>
@@ -110,7 +115,8 @@ export default async function FrontPage({ searchParams }: Props) {
       </section>
 
       <p className="foot">
-        Housepot is a student project in pilot. Balances are held on your behalf and refunded to your card.
+        Housepot is a student project in pilot. It keeps score and never holds your money: you pay each other
+        directly.
       </p>
     </main>
   );

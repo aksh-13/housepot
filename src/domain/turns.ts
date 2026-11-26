@@ -105,6 +105,9 @@ export async function openTurn(
 
 type DoneArgs = { turnId: string; memberId: string; photoId: string; now: Date };
 
+/** A turn can be marked done from this long before its deadline, and no earlier. */
+export const DONE_OPENS_MS = 2 * 24 * 60 * 60_000;
+
 /** The assignee finished their chore on time. A bounty left over from earlier misses is theirs. */
 export async function markDone(db: Db, a: DoneArgs): Promise<Result> {
   return db.tx(async (t) => {
@@ -112,6 +115,11 @@ export async function markDone(db: Db, a: DoneArgs): Promise<Result> {
     if (!turn || turn.status !== "assigned") return fail("This turn is no longer waiting.");
     if (turn.assignee_member_id !== a.memberId) return fail("It is not your turn.");
     if (a.now.getTime() > turn.due_at.getTime()) return fail("The deadline has passed.");
+    // Doing it the evening before is fine. Doing next week's turn today is not: it would also
+    // collect money waiting on this week's still-open turn of the same chore.
+    if (a.now.getTime() < turn.due_at.getTime() - DONE_OPENS_MS) {
+      return fail("This is not due yet. You can mark it done from two days before the deadline.");
+    }
     if (!(await photoBelongsTo(t, a.photoId, turn.house_id))) return fail(NO_PHOTO);
 
     const payoutCents = await choreBounty(t, turn.chore_id);

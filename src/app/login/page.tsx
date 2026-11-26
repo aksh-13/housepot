@@ -51,7 +51,16 @@ export default async function LoginPage({ searchParams }: Props) {
             <SubmitButton className="btn btn-primary btn-block" pendingLabel="Checking…">
               Sign in
             </SubmitButton>
-            <p className="small" style={{ marginTop: "var(--space-4)" }}>
+          </form>
+        ) : null}
+        {to ? (
+          <form action={requestCodeAction} style={{ marginTop: "var(--space-4)" }}>
+            <input type="hidden" name="to" value={to} />
+            <input type="hidden" name="next" value={next} />
+            <SubmitButton className="btn-quiet" pendingLabel="Sending…">
+              Did not get it? Send a new code
+            </SubmitButton>
+            <p className="small" style={{ marginTop: "var(--space-3)" }}>
               <Link href={`/login?next=${encodeURIComponent(next)}`} className="muted">
                 {byEmail ? "Use a different email" : "Use a different number"}
               </Link>

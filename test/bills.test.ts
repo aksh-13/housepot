@@ -438,3 +438,12 @@ test("the same form token in two houses makes a bill in each", async () => {
   expect(there.ok).toBe(true);
   expect(await count("bills")).toBe(2);
 });
+
+test("an edit records the old total, so the feed can show what changed", async () => {
+  const billId = await add(groceries());
+  await editBill(db, { billId, actorMemberId: ben, input: groceries({ totalCents: 9550 }), now: LATER });
+  expect((await recentActivity(db, house.houseId, 1))[0]).toMatchObject({
+    kind: "bill_edited",
+    data: { billId, description: "Groceries", totalCents: 9550, previousTotalCents: 9000 },
+  });
+});

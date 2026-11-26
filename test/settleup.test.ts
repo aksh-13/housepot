@@ -18,6 +18,7 @@ import {
   PAY_WITHIN_MS,
   settleUpHouse,
   settleUpNow,
+  settleUpWith,
   textDebtPaid,
   textDebtSent,
   textNewDebts,
@@ -495,4 +496,128 @@ describe("houseSquareUp", () => {
   test("of an even house is empty", async () => {
     expect(await houseSquareUp(db, house.houseId)).toEqual({ lines: [], unclaimedCents: 0 });
   });
+});
+
+describe("settleUpWith", () => {
+  const bill = async (paidBy: string, totalCents: number) => {
+    const r = await createBill(db, {
+      houseId: house.houseId,
+      actorMemberId: paidBy,
+      input: { description: "Bill", totalCents, paidByMemberId: paidBy, sharerMemberIds: [a, b, c] },
+      now: NOW,
+    });
+    if (!r.ok) throw new Error(r.error);
+  };
+  // Ana is up $50, Ben is down $10, Cy is down $40: "Cy pays Ana $40" and "Ben pays Ana $10".
+  const setUp = async () => {
+    await bill(a, 9000);
+    await bill(b, 3000);
+    expect(await balances()).toEqual([5000, -1000, -4000]);
+  };
+
+  test("two people settle what is between them and nobody else is touched", async () => {
+    await setUp();
+    const result = await settleUpWith(db, {
+      houseId: house.houseId,
+      memberId: b,
+      otherMemberId: a,
+      now: NOW,
+    });
+    if (!result.ok) throw new Error(result.error);
+    expect(result.debt).toMatchObject({ fromMemberId: b, toMemberId: a, amountCents: 1000 });
+    expect(await debts()).toEqual([
+      { from_member_id: b, to_member_id: a, amount_cents: 1000, status: "owed" },
+    ]);
+    expect(await balances()).toEqual([4000, 0, -4000]);
+    expect(await ledgerTotal()).toBe(0);
+    expect((await houseSquareUp(db, house.houseId)).lines).toEqual([
+      { fromMemberId: c, toMemberId: a, amountCents: 4000, fromName: "Cy", toName: "Ana" },
+    ]);
+  });
+
+  test("the person being paid can start it too", async () => {
+    await setUp();
+    const result = await settleUpWith(db, {
+      houseId: house.houseId,
+      memberId: a,
+      otherMemberId: c,
+      now: NOW,
+    });
+    if (!result.ok) throw new Error(result.error);
+    expect(result.debt).toMatchObject({ fromMemberId: c, toMemberId: a, amountCents: 4000 });
+    expect(await balances()).toEqual([1000, -1000, 0]);
+  });
+
+  test("it leaves bills editable and the monthly settle-up date alone", async () => {
+    await setUp();
+    const before = (await getHouse(db, house.houseId))?.settlementDate;
+    await settleUpWith(db, { houseId: house.houseId, memberId: b, otherMemberId: a, now: NOW });
+    expect((await getHouse(db, house.houseId))?.settlementDate).toBe(before);
+    expect(
+      (await db.query("select count(*)::int as n from bills where settled_at is not null")).rows[0].n,
+    ).toBe(0);
+  });
+
+  test("it shows in the activity feed", async () => {
+    await setUp();
+    await settleUpWith(db, { houseId: house.houseId, memberId: b, otherMemberId: a, now: NOW });
+    const { rows } = await db.query("select kind, member_id, data from activity where kind = 'settled_pair'");
+    expect(rows).toEqual([
+      { kind: "settled_pair", member_id: b, data: { fromName: "Ben", toName: "Ana", amountCents: 1000 } },
+    ]);
+  });
+
+  test("two people with nothing between them cannot settle", async () => {
+    await setUp();
+    expect(
+      await settleUpWith(db, { houseId: house.houseId, memberId: b, otherMemberId: c, now: NOW }),
+    ).toEqual({
+      ok: false,
+      error: "There is nothing to settle between you two right now.",
+    });
+    expect(await debts()).toEqual([]);
+    expect(await balances()).toEqual([5000, -1000, -4000]);
+  });
+
+  test("settling twice in a row does nothing the second time", async () => {
+    await setUp();
+    await settleUpWith(db, { houseId: house.houseId, memberId: b, otherMemberId: a, now: NOW });
+    const again = await settleUpWith(db, { houseId: house.houseId, memberId: b, otherMemberId: a, now: NOW });
+    expect(again.ok).toBe(false);
+    expect(await debts()).toHaveLength(1);
+  });
+
+  test("only housemates of the house can settle, and only with each other", async () => {
+    await setUp();
+    const other = await makeHouse(1, { moneyMode: "etransfer" });
+    const stranger = other.members[0].memberId;
+    const refused = { ok: false, error: "Only housemates can settle up." };
+    expect(
+      await settleUpWith(db, { houseId: house.houseId, memberId: stranger, otherMemberId: a, now: NOW }),
+    ).toEqual(refused);
+    expect(
+      await settleUpWith(db, { houseId: house.houseId, memberId: a, otherMemberId: stranger, now: NOW }),
+    ).toEqual(refused);
+    expect(
+      await settleUpWith(db, { houseId: house.houseId, memberId: a, otherMemberId: a, now: NOW }),
+    ).toEqual(refused);
+    expect(await debts()).toEqual([]);
+  });
+});
+
+// Found by a tester: someone who still owed another housemate was told "You are square".
+test("the 'paid' message to the payer is about that one payment, not their whole balance", async () => {
+  await aSkipsBClaims();
+  const [debt] = await settleUpHouse(db, { houseId: house.houseId, now: DEC_1, reason: "scheduled" });
+  const paid = await markDebtPaid(db, {
+    debtId: debt.id,
+    via: "manual",
+    userId: house.members[1].userId,
+    now: DEC_1,
+  });
+  if (!paid.ok) throw new Error(paid.error);
+  await db.query("delete from sms_outbox");
+  await textDebtPaid(sms, paid.debt, "https://housepot.test/settle");
+  const toAna = (await texts()).filter((t) => t.to_phone === house.members[0].phone).map((t) => t.body);
+  expect(toAna).toEqual(["Ben got your $5. That payment is done. https://housepot.test/settle"]);
 });

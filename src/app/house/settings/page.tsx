@@ -3,6 +3,7 @@ import {
   closeVoteAction,
   leaveAction,
   pauseAction,
+  renameAction,
   savePayoutAction,
   signOutAction,
 } from "@/app/actions";
@@ -201,7 +202,7 @@ export default async function SettingsPage({ searchParams }: Props) {
               <h3>Settle up early</h3>
               <p>
                 The house settles up by itself on {dateLabel(house.settlementDate)}. Any housemate can do it
-                sooner with "Settle up now" on the House page.
+                sooner from the House page: "Settle" next to a person, or "Settle everyone up".
               </p>
             </div>
           </div>
@@ -245,7 +246,34 @@ export default async function SettingsPage({ searchParams }: Props) {
         )}
         <div className="setting">
           <div>
-            <h3>Signed in as {user.name ?? "you"}</h3>
+            <h3>Put Housepot on your home screen</h3>
+            <p>
+              It opens like an app, with its own icon. iPhone: tap Share, then "Add to Home Screen". Android:
+              open the browser menu, then "Install app" or "Add to Home screen". You sign in once more inside
+              it.
+            </p>
+          </div>
+        </div>
+        <form action={renameAction}>
+          <div className="field">
+            <label htmlFor="name">Your name, as housemates see it</label>
+            <div className="invite">
+              <input
+                id="name"
+                name="name"
+                className="input"
+                defaultValue={user.name ?? ""}
+                maxLength={40}
+                autoComplete="given-name"
+                required
+              />
+              <SubmitButton>Save</SubmitButton>
+            </div>
+          </div>
+        </form>
+        <div className="setting">
+          <div>
+            <h3>Signed in</h3>
             <p>{user.email ?? user.phone}</p>
           </div>
           <form action={signOutAction}>
