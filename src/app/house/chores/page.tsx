@@ -15,7 +15,17 @@ type Props = { searchParams: Promise<Record<string, string | string[] | undefine
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
 /** The fields shared by "add a chore" and "edit a chore". */
-function ChoreFields({ chore, today, idPrefix }: { chore?: Chore; today: string; idPrefix: string }) {
+function ChoreFields({
+  chore,
+  today,
+  idPrefix,
+  hasTeams,
+}: {
+  chore?: Chore;
+  today: string;
+  idPrefix: string;
+  hasTeams: boolean;
+}) {
   const kind = chore?.schedule.kind ?? "weekly";
   const weekday = chore?.schedule.kind === "weekly" ? chore.schedule.weekday : 4;
   const everyN = chore?.schedule.kind === "every_n_days" ? chore.schedule.n : 3;
@@ -73,6 +83,24 @@ function ChoreFields({ chore, today, idPrefix }: { chore?: Chore; today: string;
           <input id={id("anchor")} name="anchorDate" className="input" type="date" defaultValue={anchor} />
         </div>
       </ScheduleFields>
+      {hasTeams && (
+        <div className="field">
+          <label htmlFor={id("doneBy")}>Who does it</label>
+          <select
+            id={id("doneBy")}
+            name="doneBy"
+            className="input"
+            defaultValue={(chore ? chore.teamDuty : true) ? "team" : "person"}
+          >
+            <option value="team">The team on duty</option>
+            <option value="person">One person at a time, round the whole house</option>
+          </select>
+          <span className="hint">
+            A team chore is given to someone on the team on duty. Anyone on that team can do it, it cannot be
+            skipped, and a miss is shared by the team.
+          </span>
+        </div>
+      )}
       <div className="pair">
         <div className="field">
           <label htmlFor={id("time")}>Done by</label>
@@ -115,6 +143,7 @@ export default async function ChoresPage({ searchParams }: Props) {
     houseTurns(db, house.id),
   ]);
   const today = localDate(now, house.tz);
+  const hasTeams = Boolean(house.teamWeeks) && housemates.some((m) => m.teamId);
   // Whose turn each chore is right now, so the list answers "who has this one?".
   const waiting = new Map(turns.filter((t) => t.status === "assigned").map((t) => [t.choreId, t]));
 
@@ -139,7 +168,7 @@ export default async function ChoresPage({ searchParams }: Props) {
                   {waiting.has(chore.id) && (
                     <>
                       <br />
-                      Next:{" "}
+                      Next: {waiting.get(chore.id)?.teamName ? `${waiting.get(chore.id)?.teamName}, ` : ""}
                       {waiting.get(chore.id)?.assigneeMemberId === member.id
                         ? "you"
                         : waiting.get(chore.id)?.assigneeName}
@@ -151,7 +180,7 @@ export default async function ChoresPage({ searchParams }: Props) {
               <div className="body">
                 <form action={updateChoreAction}>
                   <input type="hidden" name="choreId" value={chore.id} />
-                  <ChoreFields chore={chore} today={today} idPrefix={chore.id} />
+                  <ChoreFields chore={chore} today={today} idPrefix={chore.id} hasTeams={hasTeams} />
                   <SubmitButton className="btn btn-primary btn-block" pendingLabel="Saving…">
                     Save changes
                   </SubmitButton>
@@ -171,7 +200,7 @@ export default async function ChoresPage({ searchParams }: Props) {
       <section className="section">
         <h2 className="label">Add a chore</h2>
         <form action={addChoreAction}>
-          <ChoreFields today={today} idPrefix="new" />
+          <ChoreFields today={today} idPrefix="new" hasTeams={hasTeams} />
           <div className="field">
             <label htmlFor="new-first">Who goes first</label>
             <select id="new-first" name="firstMemberId" className="input" defaultValue={member.id}>
@@ -183,6 +212,7 @@ export default async function ChoresPage({ searchParams }: Props) {
             </select>
             <span className="hint">
               You can give it to anyone. After the first turn it goes round the house in order.
+              {hasTeams ? " For a team chore this is ignored: it is spread across the team on duty." : ""}
             </span>
           </div>
           <SubmitButton className="btn btn-primary btn-block" pendingLabel="Adding…">

@@ -30,6 +30,16 @@ In a house that settles up by e-Transfer, the same balance also tracks shared bi
 - The home screen shows the fewest payments that would square the house up right now. They become real debts at the next settle-up.
 - Any housemate can edit or delete a bill until a settle-up has happened. Every change shows in the activity feed, and nothing is erased from the ledger: an edit or delete writes opposite entries.
 
+## Teams
+
+A bigger house can split into cleaning teams that take turns being on duty: one team for a set number of weeks (one to eight), then the next, round and round. Set it up on the Teams tab. A house with no teams works exactly as before.
+
+- **Team chores.** Each chore is either for "the team on duty" or for "one person at a time". A team chore's turn belongs to whichever team is on duty when it is due.
+- **Who has it.** Team chores are spread across the team so everyone gets one before anyone gets two, and the same chore moves round the team week to week. Anyone in the house can change who has one, on the Teams tab or with "I'll take it".
+- **Doing it.** Whoever has it is named and reminded, but anyone on the team can do it, with a photo.
+- **Missing it.** A team chore cannot be skipped for a price. If nobody on the team does it by the deadline, the price is split equally between everyone on the team, and the chore is open to the whole house as usual.
+- **Nudges.** One-tap messages to the team on duty from the House page, like "Garbage is full". A house can add its own. Each goes out at most once an hour.
+
 ## On a phone
 
 Housepot is a website, but it can sit on a phone's home screen like an app: on an iPhone tap Share, then "Add to Home Screen"; on Android open the browser menu and choose "Install app". It then opens full screen with its own icon. The manifest is `src/app/manifest.ts` and the icons are in `public/icons`.
@@ -166,6 +176,7 @@ src/domain/      the rules, as plain functions that take a database and a time
   settleup.ts    e-Transfer houses: settling up (one person or the whole house), debts, reminders, the live "to square up" list
   split.ts       who owes what on a bill (plain arithmetic, also used by the form's preview)
   bills.ts       shared bills: add, edit, delete, and their ledger entries
+  teams.ts       cleaning teams: who is on duty, who is on which team, nudges
   inbound.ts     forwarded Interac emails: matching payments and money requests
   interac.ts     reading Interac's emails (wording not yet checked against real ones)
 src/providers/   texts, email, payments, photo storage: a real and a fake version of each

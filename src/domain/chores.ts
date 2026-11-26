@@ -3,6 +3,7 @@ import type { Db } from "@/db";
 import { nextDueAt, type Schedule } from "@/time";
 import { logActivity } from "./activity";
 import { activeMembers, getHouse, memberById } from "./houses";
+import { teamOnDuty } from "./teams";
 
 export const DEFAULT_SKIP_PRICE_CENTS = 500;
 const MIN_SKIP_PRICE_CENTS = 100;
@@ -15,6 +16,8 @@ export type Chore = {
   deadlineTime: string;
   skipPriceCents: number;
   archived: boolean;
+  /** True: each turn belongs to the cleaning team on duty, not to one person. */
+  teamDuty: boolean;
 };
 
 type ChoreRow = {
@@ -27,6 +30,7 @@ type ChoreRow = {
   deadline_time: string;
   skip_price_cents: number;
   archived: boolean;
+  team_duty: boolean;
 };
 
 type Fail = { ok: false; error: string };
@@ -43,11 +47,12 @@ function toChore(r: ChoreRow): Chore {
     deadlineTime: r.deadline_time,
     skipPriceCents: r.skip_price_cents,
     archived: r.archived,
+    teamDuty: r.team_duty,
   };
 }
 
 const CHORE_COLUMNS =
-  "id, name, schedule_kind, weekday, every_n, anchor_date, deadline_time, skip_price_cents, archived";
+  "id, name, schedule_kind, weekday, every_n, anchor_date, deadline_time, skip_price_cents, archived, team_duty";
 
 /** The house's chores that are still in use, oldest first. */
 export async function listChores(db: Db, houseId: string): Promise<Chore[]> {
@@ -103,6 +108,8 @@ type CreateArgs = {
   skipPriceCents?: number;
   /** Who takes the first turn. Any active housemate; the person adding the chore if not given. */
   firstMemberId?: string;
+  /** True: the chore belongs to the cleaning team on duty, not to one person at a time. */
+  teamDuty?: boolean;
   now: Date;
 };
 
@@ -124,9 +131,18 @@ export async function createChore(db: Db, a: CreateArgs): Promise<{ ok: true; ch
   return db.tx(async (t) => {
     const { rows } = await t.query<{ id: string }>(
       `insert into chores (house_id, name, schedule_kind, weekday, every_n, anchor_date, deadline_time,
-         skip_price_cents, first_member_id, created_at)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning id`,
-      [a.houseId, name, ...scheduleColumns(a.schedule), a.deadlineTime, skipPriceCents, first.id, a.now],
+         skip_price_cents, first_member_id, team_duty, created_at)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) returning id`,
+      [
+        a.houseId,
+        name,
+        ...scheduleColumns(a.schedule),
+        a.deadlineTime,
+        skipPriceCents,
+        first.id,
+        a.teamDuty ?? false,
+        a.now,
+      ],
     );
     await logActivity(t, {
       houseId: a.houseId,
@@ -147,6 +163,7 @@ type UpdateArgs = {
   deadlineTime?: string;
   skipPriceCents?: number;
   archived?: boolean;
+  teamDuty?: boolean;
   now: Date;
 };
 
@@ -168,13 +185,17 @@ export async function updateChore(db: Db, a: UpdateArgs): Promise<{ ok: true } |
   const schedule = a.schedule ?? chore.schedule;
   const deadlineTime = a.deadlineTime ?? chore.deadlineTime;
   const archived = a.archived ?? chore.archived;
+  const teamDuty = a.teamDuty ?? chore.teamDuty;
+  // Who a turn belongs to is fixed when it is created, so changing that restarts the waiting turn too.
   const timingChanged =
-    JSON.stringify(schedule) !== JSON.stringify(chore.schedule) || deadlineTime !== chore.deadlineTime;
+    JSON.stringify(schedule) !== JSON.stringify(chore.schedule) ||
+    deadlineTime !== chore.deadlineTime ||
+    teamDuty !== chore.teamDuty;
 
   await db.tx(async (t) => {
     await t.query(
       `update chores set name = $2, schedule_kind = $3, weekday = $4, every_n = $5, anchor_date = $6,
-         deadline_time = $7, skip_price_cents = $8, archived = $9 where id = $1`,
+         deadline_time = $7, skip_price_cents = $8, archived = $9, team_duty = $10 where id = $1`,
       [
         a.choreId,
         name,
@@ -182,6 +203,7 @@ export async function updateChore(db: Db, a: UpdateArgs): Promise<{ ok: true } |
         deadlineTime,
         a.skipPriceCents ?? chore.skipPriceCents,
         archived,
+        teamDuty,
       ],
     );
     if (timingChanged || (archived && !chore.archived)) {
@@ -198,6 +220,38 @@ export async function updateChore(db: Db, a: UpdateArgs): Promise<{ ok: true } |
     });
   });
   return { ok: true };
+}
+
+/**
+ * Who on the team takes a team chore's next turn. Chores are spread out: it goes to whoever has the
+ * fewest team chores waiting right now, and between equals to the teammate after whoever had this
+ * chore last. So everyone gets one before anyone gets two, and the same chore moves round the team.
+ * The house can change it afterwards (see assignTurn); this is only the starting point.
+ */
+async function nextOnTeam(
+  db: Db,
+  teamId: string,
+  memberIds: string[],
+  choreId: string,
+  members: Awaited<ReturnType<typeof activeMembers>>,
+) {
+  const load = await db.query<{ id: string; n: number }>(
+    `select assignee_member_id as id, count(*)::int as n from turns
+     where team_id = $1 and status = 'assigned' group by assignee_member_id`,
+    [teamId],
+  );
+  const waiting = new Map(load.rows.map((r) => [r.id, r.n]));
+  const last = await db.query<{ id: string }>(
+    `select assignee_member_id as id from turns
+     where chore_id = $1 and team_id = $2 and status <> 'cancelled' order by due_at desc limit 1`,
+    [choreId, teamId],
+  );
+  // Start looking just after whoever had this chore last, so ties move it on to the next person.
+  const from = (memberIds.indexOf(last.rows[0]?.id ?? "") + 1) % memberIds.length;
+  const order = [...memberIds.slice(from), ...memberIds.slice(0, from)];
+  const fewest = Math.min(...order.map((id) => waiting.get(id) ?? 0));
+  const chosen = order.find((id) => (waiting.get(id) ?? 0) === fewest) ?? memberIds[0];
+  return members.find((m) => m.id === chosen) ?? members[0];
 }
 
 /**
@@ -233,15 +287,20 @@ export async function ensureTurns(db: Db, houseId: string, now: Date): Promise<n
     const previous = last.rows[0];
     const after = previous && previous.due_at.getTime() > now.getTime() ? previous.due_at : now;
     const dueAt = nextDueAt(chore.schedule, chore.deadlineTime, house.tz, after);
+    // A team chore belongs to whichever team is on duty when it is due. If the house has no teams,
+    // or that team has nobody on it, the chore goes to one person as usual.
+    const duty = chore.teamDuty ? await teamOnDuty(db, houseId, dueAt) : null;
+    const team = duty && duty.team.memberIds.length > 0 ? duty.team : null;
     const picked = previous ? undefined : members.find((m) => m.id === firstOf.get(chore.id));
-    const assignee =
-      picked ?? (previous && members.find((m) => m.rotationPosition > previous.position)) ?? members[0];
+    const assignee = team
+      ? await nextOnTeam(db, team.id, team.memberIds, chore.id, members)
+      : (picked ?? (previous && members.find((m) => m.rotationPosition > previous.position)) ?? members[0]);
 
     const inserted = await db.query(
-      `insert into turns (chore_id, house_id, assignee_member_id, due_at, created_at)
-       values ($1, $2, $3, $4, $5)
+      `insert into turns (chore_id, house_id, assignee_member_id, team_id, due_at, created_at)
+       values ($1, $2, $3, $4, $5, $6)
        on conflict (chore_id) where status = 'assigned' do nothing`,
-      [chore.id, houseId, assignee.id, dueAt, now],
+      [chore.id, houseId, assignee.id, team?.id ?? null, dueAt, now],
     );
     created += inserted.rowCount;
   }

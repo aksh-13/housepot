@@ -11,6 +11,9 @@ export type TurnView = {
   choreName: string;
   assigneeMemberId: string;
   assigneeName: string;
+  /** Set when the turn belongs to a cleaning team: then it is the team's, not the assignee's. */
+  teamId: string | null;
+  teamName: string | null;
   dueAt: Date;
   status: "assigned" | "open";
   openedReason: "skip" | "miss" | "dispute" | null;
@@ -24,12 +27,14 @@ export async function houseTurns(db: Db, houseId: string): Promise<TurnView[]> {
   const { rows } = await db.query<TurnView>(
     `select t.id, t.chore_id as "choreId", c.name as "choreName",
             t.assignee_member_id as "assigneeMemberId", coalesce(u.name, 'Housemate') as "assigneeName",
+            t.team_id as "teamId", tm.name as "teamName",
             t.due_at as "dueAt", t.status, t.opened_reason as "openedReason",
             c.skip_price_cents as "skipPriceCents",
             coalesce((select sum(amount_cents) from ledger_entries le where le.chore_id = c.id), 0)::int as "bountyCents"
      from turns t
      join chores c on c.id = t.chore_id
      join members m on m.id = t.assignee_member_id join users u on u.id = m.user_id
+     left join teams tm on tm.id = t.team_id
      where t.house_id = $1 and t.status in ('assigned', 'open')
      order by t.due_at, t.created_at`,
     [houseId],

@@ -12,6 +12,9 @@ type TurnRow = {
   chore_id: string;
   house_id: string;
   assignee_member_id: string;
+  /** Set when the turn belongs to a cleaning team. Then the assignee is not who it is waiting on. */
+  team_id: string | null;
+  team_name: string | null;
   due_at: Date;
   status: string;
   chore_name: string;
@@ -26,9 +29,10 @@ const fail = (error: string): Result => ({ ok: false, error });
 async function lockTurn(t: Db, turnId: string): Promise<TurnRow | null> {
   await lockChoreOfTurn(t, turnId);
   const { rows } = await t.query<TurnRow>(
-    `select t.id, t.chore_id, t.house_id, t.assignee_member_id, t.due_at, t.status,
-            c.name as chore_name, c.skip_price_cents, h.money_mode
+    `select t.id, t.chore_id, t.house_id, t.assignee_member_id, t.team_id, tm.name as team_name,
+            t.due_at, t.status, c.name as chore_name, c.skip_price_cents, h.money_mode
      from turns t join chores c on c.id = t.chore_id join houses h on h.id = t.house_id
+     left join teams tm on tm.id = t.team_id
      where t.id = $1 for update of t`,
     [turnId],
   );
@@ -51,7 +55,8 @@ export async function lockChoreOfTurn(t: Db, turnId: string): Promise<void> {
 /** A member who leaves with turns waiting on them is charged as if they had skipped each one. */
 export async function skipWaitingTurnsOf(t: Db, memberId: string, now: Date): Promise<void> {
   const waiting = await t.query<{ id: string }>(
-    "select id from turns where assignee_member_id = $1 and status = 'assigned' order by due_at",
+    // A team's turn is not waiting on any one person, so leaving does not skip it.
+    "select id from turns where assignee_member_id = $1 and status = 'assigned' and team_id is null order by due_at",
     [memberId],
   );
   for (const row of waiting.rows) {
@@ -80,14 +85,36 @@ export async function openTurn(
   reason: "skip" | "miss" | "dispute",
   now: Date,
 ): Promise<void> {
-  await transfer(t, {
-    houseId: turn.house_id,
-    from: { memberId: turn.assignee_member_id },
-    to: { choreId: turn.chore_id },
-    amountCents: turn.skip_price_cents,
-    kind: reason === "skip" ? "skip" : "miss",
-    turnId: turn.id,
-  });
+  if (turn.team_id) {
+    // The whole team shares a miss equally. Odd cents fall on the first people in rotation order.
+    const team = await t.query<{ id: string }>(
+      "select id from members where team_id = $1 and status = 'active' order by rotation_position",
+      [turn.team_id],
+    );
+    const share = team.rows.length ? Math.floor(turn.skip_price_cents / team.rows.length) : 0;
+    const odd = team.rows.length ? turn.skip_price_cents - share * team.rows.length : 0;
+    for (const [i, m] of team.rows.entries()) {
+      const amountCents = share + (i < odd ? 1 : 0);
+      if (amountCents === 0) continue;
+      await transfer(t, {
+        houseId: turn.house_id,
+        from: { memberId: m.id },
+        to: { choreId: turn.chore_id },
+        amountCents,
+        kind: "miss",
+        turnId: turn.id,
+      });
+    }
+  } else {
+    await transfer(t, {
+      houseId: turn.house_id,
+      from: { memberId: turn.assignee_member_id },
+      to: { choreId: turn.chore_id },
+      amountCents: turn.skip_price_cents,
+      kind: reason === "skip" ? "skip" : "miss",
+      turnId: turn.id,
+    });
+  }
   await rollOlderOpenTurns(t, turn.chore_id, turn.id);
   await t.query(
     `update turns set status = 'open', opened_reason = $2, completed_by_member_id = null, completed_at = null,
@@ -96,10 +123,49 @@ export async function openTurn(
   );
   await logActivity(t, {
     houseId: turn.house_id,
-    memberId: turn.assignee_member_id,
+    memberId: turn.team_id ? null : turn.assignee_member_id,
     kind: reason === "skip" ? "skipped" : reason === "miss" ? "missed" : "dispute_passed",
-    data: { turnId: turn.id, choreName: turn.chore_name, amountCents: turn.skip_price_cents },
+    data: {
+      turnId: turn.id,
+      choreName: turn.chore_name,
+      amountCents: turn.skip_price_cents,
+      ...(turn.team_name ? { teamName: turn.team_name } : {}),
+    },
     now,
+  });
+}
+
+/**
+ * Gives a team chore's waiting turn to someone else on that team. Any housemate can do it: the
+ * automatic spread is only a starting point, and houses sort out who does what among themselves.
+ * It changes who is named and reminded. Who may do it, and who pays for a miss, stay with the team.
+ */
+export async function assignTurn(
+  db: Db,
+  a: { turnId: string; memberId: string; toMemberId: string; now: Date },
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  return db.tx(async (t) => {
+    const turn = await lockTurn(t, a.turnId);
+    const actor = await memberById(t, a.memberId);
+    if (!turn || !actor || actor.houseId !== turn.house_id || actor.status !== "active") {
+      return fail("Only housemates can do that.");
+    }
+    if (turn.status !== "assigned") return fail("This turn is no longer waiting.");
+    if (!turn.team_id) return fail("Only a team chore can be given to someone else.");
+    const to = await memberById(t, a.toMemberId);
+    if (!to || to.status !== "active" || to.teamId !== turn.team_id) {
+      return fail(`Pick someone on ${turn.team_name ?? "that team"}.`);
+    }
+    if (to.id === turn.assignee_member_id) return { ok: true as const };
+    await t.query("update turns set assignee_member_id = $2 where id = $1", [turn.id, to.id]);
+    await logActivity(t, {
+      houseId: turn.house_id,
+      memberId: a.memberId,
+      kind: "turn_assigned",
+      data: { choreName: turn.chore_name, toName: to.name },
+      now: a.now,
+    });
+    return { ok: true as const };
   });
 }
 
@@ -113,7 +179,12 @@ export async function markDone(db: Db, a: DoneArgs): Promise<Result> {
   return db.tx(async (t) => {
     const turn = await lockTurn(t, a.turnId);
     if (!turn || turn.status !== "assigned") return fail("This turn is no longer waiting.");
-    if (turn.assignee_member_id !== a.memberId) return fail("It is not your turn.");
+    if (turn.team_id) {
+      const doer = await memberById(t, a.memberId);
+      if (!doer || doer.status !== "active" || doer.teamId !== turn.team_id) {
+        return fail(`This one belongs to ${turn.team_name ?? "another team"}.`);
+      }
+    } else if (turn.assignee_member_id !== a.memberId) return fail("It is not your turn.");
     if (a.now.getTime() > turn.due_at.getTime()) return fail("The deadline has passed.");
     // Doing it the evening before is fine. Doing next week's turn today is not: it would also
     // collect money waiting on this week's still-open turn of the same chore.
@@ -157,6 +228,12 @@ export async function payToSkip(db: Db, a: SkipArgs): Promise<Result> {
   return db.tx(async (t) => {
     const turn = await lockTurn(t, a.turnId);
     if (!turn || turn.status !== "assigned") return fail("This turn is no longer waiting.");
+    // One person must not be able to spend their teammates' money.
+    if (turn.team_id) {
+      return fail(
+        "A team chore cannot be skipped. Someone on the team does it, or the whole team is charged.",
+      );
+    }
     if (turn.assignee_member_id !== a.memberId) return fail("It is not your turn.");
     if (a.now.getTime() > turn.due_at.getTime()) return fail("The deadline has passed.");
     // A card house only lets you skip with money you have paid in. In an e-Transfer house the

@@ -31,7 +31,8 @@ import {
   textDebtPaid,
   textNewDebts,
 } from "@/domain/settleup";
-import { claimBounty, markDone, payToSkip } from "@/domain/turns";
+import { addNudge, addTeam, removeNudge, removeTeam, saveTeams, sendNudge } from "@/domain/teams";
+import { assignTurn, claimBounty, markDone, payToSkip } from "@/domain/turns";
 import { textBountyOpen } from "@/domain/views";
 import {
   baseUrl,
@@ -317,6 +318,7 @@ export async function addChoreAction(fd: FormData): Promise<void> {
     deadlineTime: str(fd, "deadlineTime"),
     skipPriceCents: dollarsToCents(str(fd, "skipPrice") || "5"),
     firstMemberId: str(fd, "firstMemberId") || undefined,
+    teamDuty: str(fd, "doneBy") === "team",
     now,
   });
   if (!created.ok) back("/house/chores", "error", created.error);
@@ -334,6 +336,8 @@ export async function updateChoreAction(fd: FormData): Promise<void> {
     schedule: scheduleFrom(fd),
     deadlineTime: str(fd, "deadlineTime"),
     skipPriceCents: dollarsToCents(str(fd, "skipPrice")),
+    // The field is only on the form when the house has teams; without it, leave the chore as it is.
+    teamDuty: fd.has("doneBy") ? str(fd, "doneBy") === "team" : undefined,
     now,
   });
   if (!updated.ok) back("/house/chores", "error", updated.error);
@@ -401,6 +405,103 @@ export async function leaveAction(): Promise<void> {
     );
   }
   redirect("/?notice=You%20left%20the%20house%20and%20were%20cashed%20out.");
+}
+
+// ── Cleaning teams ────────────────────────────────────────────────────────────
+
+export async function addTeamAction(): Promise<void> {
+  const { member, house } = await requireMember("/teams");
+  const now = new Date();
+  const added = await addTeam(getDb(), { houseId: house.id, memberId: member.id, now });
+  if (!added.ok) back("/teams", "error", added.error);
+  await ensureTurns(getDb(), house.id, now);
+  back("/teams", "notice", "Team added. Put people on it below.");
+}
+
+export async function removeTeamAction(fd: FormData): Promise<void> {
+  const { member, house } = await requireMember("/teams");
+  const now = new Date();
+  const removed = await removeTeam(getDb(), { teamId: str(fd, "teamId"), memberId: member.id, now });
+  if (!removed.ok) back("/teams", "error", removed.error);
+  await ensureTurns(getDb(), house.id, now);
+  back("/teams", "notice", "Team removed.");
+}
+
+/** The Teams form: rotation length, start date, team names (name:<teamId>) and who is on which (team:<memberId>). */
+export async function saveTeamsAction(fd: FormData): Promise<void> {
+  const { member, house } = await requireMember("/teams");
+  const names: Record<string, string> = {};
+  const assignments: Record<string, string | null> = {};
+  for (const [key, value] of fd.entries()) {
+    if (key.startsWith("name:")) names[key.slice(5)] = String(value);
+    if (key.startsWith("team:")) assignments[key.slice(5)] = String(value) || null;
+  }
+  const now = new Date();
+  const saved = await saveTeams(getDb(), {
+    houseId: house.id,
+    memberId: member.id,
+    weeks: Number(str(fd, "weeks")),
+    startDate: str(fd, "startDate"),
+    names,
+    assignments,
+    now,
+  });
+  if (!saved.ok) back("/teams", "error", saved.error);
+  await ensureTurns(getDb(), house.id, now);
+  back("/teams", "notice", "Teams saved.");
+}
+
+export async function addNudgeAction(fd: FormData): Promise<void> {
+  const { member, house } = await requireMember("/teams");
+  const added = await addNudge(getDb(), {
+    houseId: house.id,
+    memberId: member.id,
+    label: str(fd, "label"),
+    now: new Date(),
+  });
+  if (!added.ok) back("/teams", "error", added.error);
+  back("/teams", "notice", "Nudge added.");
+}
+
+export async function removeNudgeAction(fd: FormData): Promise<void> {
+  const { member } = await requireMember("/teams");
+  const removed = await removeNudge(getDb(), { nudgeId: str(fd, "nudgeId"), memberId: member.id });
+  if (!removed.ok) back("/teams", "error", removed.error);
+  back("/teams", "notice", "Nudge removed.");
+}
+
+/** Gives a team chore to someone on that team: "I'll take it" on the House page, or the picker on Teams. */
+export async function assignTurnAction(fd: FormData): Promise<void> {
+  const { member } = await requireMember("/house");
+  const page = str(fd, "back") === "teams" ? "/teams" : "/house";
+  const toMemberId = str(fd, "toMemberId") || member.id;
+  const given = await assignTurn(getDb(), {
+    turnId: str(fd, "turnId"),
+    memberId: member.id,
+    toMemberId,
+    now: new Date(),
+  });
+  if (!given.ok) back(page, "error", given.error);
+  back(page, "notice", toMemberId === member.id ? "It is yours now." : "Done. They are down for it now.");
+}
+
+/** A nudge button on the House page: tells the team on duty. */
+export async function nudgeAction(fd: FormData): Promise<void> {
+  const { member } = await requireMember("/house");
+  const sent = await sendNudge(getDb(), getProviders().sms, {
+    nudgeId: str(fd, "nudgeId"),
+    memberId: member.id,
+    now: new Date(),
+    link: `${await baseUrl()}/house`,
+  });
+  if (!sent.ok) back("/house", "error", sent.error);
+  back(
+    "/house",
+    "notice",
+    sent.sentTo === 0
+      ? `Noted. You are the only one on ${sent.teamName}, so nobody else was told.`
+      : `${sent.teamName} has been told.`,
+  );
 }
 
 // ── Bills ─────────────────────────────────────────────────────────────────────

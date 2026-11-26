@@ -51,9 +51,10 @@ async function chargeMisses(ctx: Ctx, house: House, members: Member[]): Promise<
     id: string;
     chore_id: string;
     assignee_member_id: string;
+    team_id: string | null;
     name: string;
   }>(
-    `select t.id, t.chore_id, t.assignee_member_id, c.name
+    `select t.id, t.chore_id, t.assignee_member_id, t.team_id, c.name
      from turns t join chores c on c.id = t.chore_id
      where t.house_id = $1 and t.status = 'assigned' and t.due_at < $2 order by t.due_at`,
     [house.id, ctx.now],
@@ -64,7 +65,14 @@ async function chargeMisses(ctx: Ctx, house: House, members: Member[]): Promise<
     ctx.summary.misses += 1;
     const bounty = formatCents(await choreBounty(ctx.db, turn.chore_id));
     for (const m of members) {
-      if (m.id === turn.assignee_member_id) {
+      if (turn.team_id && m.teamId === turn.team_id) {
+        const balance = formatCents(await memberBalance(ctx.db, m.id));
+        await send(
+          ctx,
+          m.contact,
+          `Your team missed ${turn.name}. The ${bounty} was split between everyone on the team, and your balance is now ${balance}. Do it before a housemate does to win it back: ${ctx.link}`,
+        );
+      } else if (!turn.team_id && m.id === turn.assignee_member_id) {
         const balance = formatCents(await memberBalance(ctx.db, m.id));
         await send(
           ctx,
@@ -86,20 +94,29 @@ async function sendReminders(ctx: Ctx, house: House, members: Member[]): Promise
   const waiting = await ctx.db.query<{
     id: string;
     assignee_member_id: string;
+    team_id: string | null;
     due_at: Date;
     name: string;
     reminded_morning_at: Date | null;
     reminded_final_at: Date | null;
   }>(
-    `select t.id, t.assignee_member_id, t.due_at, c.name, t.reminded_morning_at, t.reminded_final_at
+    `select t.id, t.assignee_member_id, t.team_id, t.due_at, c.name, t.reminded_morning_at, t.reminded_final_at
      from turns t join chores c on c.id = t.chore_id
      where t.house_id = $1 and t.status = 'assigned' and t.due_at >= $2`,
     [house.id, ctx.now],
   );
   const nowLocal = DateTime.fromJSDate(ctx.now, { zone: house.tz });
   for (const turn of waiting.rows) {
-    const assignee = members.find((m) => m.id === turn.assignee_member_id);
-    if (!assignee) continue;
+    // A team's turn reminds everyone on the team; anyone's turn reminds that one person.
+    const remind = turn.team_id
+      ? members.filter((m) => m.teamId === turn.team_id)
+      : members.filter((m) => m.id === turn.assignee_member_id);
+    if (remind.length === 0) continue;
+    const whose = turn.team_id ? "your team's" : "yours";
+    const has = members.find((m) => m.id === turn.assignee_member_id)?.name;
+    const options = turn.team_id
+      ? `${has ? `${has} has it, and anyone` : "Anyone"} on the team can do it with a photo`
+      : "Done or skip";
     const dueLocal = DateTime.fromJSDate(turn.due_at, { zone: house.tz });
     const by = dueLocal.toFormat("h:mm a");
     const finalDue =
@@ -115,11 +132,9 @@ async function sendReminders(ctx: Ctx, house: House, members: Member[]): Promise
         [turn.id, ctx.now],
       );
       if (claimed.rowCount === 0) continue;
-      await send(
-        ctx,
-        assignee.contact,
-        `2 hours left for ${turn.name} (by ${by}). Done or skip: ${ctx.link}`,
-      );
+      for (const m of remind) {
+        await send(ctx, m.contact, `2 hours left for ${turn.name} (by ${by}). ${options}: ${ctx.link}`);
+      }
       ctx.summary.reminders += 1;
     } else if (morningDue) {
       const claimed = await ctx.db.query(
@@ -127,7 +142,9 @@ async function sendReminders(ctx: Ctx, house: House, members: Member[]): Promise
         [turn.id, ctx.now],
       );
       if (claimed.rowCount === 0) continue;
-      await send(ctx, assignee.contact, `${turn.name} is yours today, by ${by}. Done or skip: ${ctx.link}`);
+      for (const m of remind) {
+        await send(ctx, m.contact, `${turn.name} is ${whose} today, by ${by}. ${options}: ${ctx.link}`);
+      }
       ctx.summary.reminders += 1;
     }
   }
