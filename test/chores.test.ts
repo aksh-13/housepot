@@ -39,6 +39,7 @@ test("a chore defaults to a $5 skip price and appears in the list", async () => 
       deadlineTime: "21:00",
       skipPriceCents: 500,
       archived: false,
+      teamDuty: false,
     },
   ]);
 });

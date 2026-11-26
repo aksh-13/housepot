@@ -30,6 +30,8 @@ export type Member = {
   etransferEmail: string | null;
   /** Key from BANKS, for the "open my bank" button. */
   bank: string | null;
+  /** The cleaning team this housemate is on, if the house uses teams. */
+  teamId: string | null;
   name: string;
   /** Where messages for this person go: their email if they have one, otherwise their phone. */
   contact: string;
@@ -44,14 +46,19 @@ export type House = {
   paused: boolean;
   settlementDate: string;
   moneyMode: MoneyMode;
+  /** How many weeks each cleaning team is on duty. Null: the house does not use teams. */
+  teamWeeks: number | null;
+  /** The day the first team's first stint began, as YYYY-MM-DD. */
+  teamStart: string | null;
 };
 
 const MEMBER_COLUMNS = `m.id, m.house_id as "houseId", m.user_id as "userId", m.status,
   m.rotation_position as "rotationPosition", m.auto_reload as "autoReload", m.customer_ref as "customerRef",
-  m.etransfer_email as "etransferEmail", m.bank, coalesce(u.name, 'Housemate') as name, coalesce(u.email, u.phone) as contact`;
+  m.etransfer_email as "etransferEmail", m.bank, m.team_id as "teamId", coalesce(u.name, 'Housemate') as name, coalesce(u.email, u.phone) as contact`;
 
 export const HOUSE_COLUMNS = `id, name, invite_code as "inviteCode", deposit_cents as "depositCents", tz, paused,
-  settlement_date as "settlementDate", money_mode as "moneyMode"`;
+  settlement_date as "settlementDate", money_mode as "moneyMode", team_weeks as "teamWeeks",
+  team_start as "teamStart"`;
 
 type Fail = { ok: false; error: string };
 
