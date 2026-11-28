@@ -63,6 +63,23 @@ A short step-by-step screen the first time someone opens the app, with progress 
   3. Your e-Transfer email.
 - The walkthrough is remembered per person. It can be reopened from Settings ("How Housepot works").
 
+### 6. Swapping turns
+
+Chores rotate, so a turn is fixed once it is yours. A swap lets two people agree to move it.
+
+- On a waiting turn, its owner taps **Ask someone to take it**, picks a housemate, and can offer one of that person's waiting turns in exchange.
+- The other person accepts or declines. On accept, the turn is theirs (they are reminded, and an expiry is charged to them). An exchange moves both turns at once.
+- Until they accept, the turn stays with its owner. A request lapses when either turn's deadline passes, or when either turn stops waiting.
+- No money moves. One open request per turn. Team chores can already be handed to a teammate on the Teams tab, so swaps are for one-person turns.
+
+### 7. Teams in setup
+
+Teams already exist (the Teams tab), but setup never mentions them.
+
+- The walkthrough asks **How does your house share chores?**: "Everyone takes turns" (the default; nothing else shown) or "Teams take turns on duty" (how many teams, and how many weeks each). Picking teams creates them.
+- People can only be put on a team once they have joined, so while a house has teams and an active housemate on no team, the House page shows "Put people on teams" with a link to the Teams tab.
+- Each chore added in a team house asks whether it is for the team on duty or one person at a time, as now.
+
 ## Built in this order
 
 1. Skipping removed, and the "worth" wording. Small.
@@ -70,8 +87,9 @@ A short step-by-step screen the first time someone opens the app, with progress 
 3. Approval votes replace disputes: new turn status `pending`, new `approval_votes` table, the tick closes votes after 48 hours, and the House page gets an "Approve" section.
 4. The person a chore expired on cannot claim it.
 5. Worth proposals: a `chore_proposals` table and `proposal_votes`, plus the House page section.
-6. The first-run walkthrough: `members.onboarded_at`.
-7. README and design-doc updates, tests for each step, then a browser walkthrough.
+6. Swapping turns: a `swap_requests` table.
+7. The first-run walkthrough, with the teams question: `members.onboarded_at`.
+8. README and design-doc updates, tests for each step, then a browser walkthrough.
 
 Each step is its own commit on `feat/approvals-and-chore-worth`, with tests passing at every commit.
 
