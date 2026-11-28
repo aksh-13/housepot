@@ -35,6 +35,8 @@ export default async function NewBillPage({ searchParams }: Props) {
             sharers: members.map((m) => m.id),
             subtotal: "",
             own: {},
+            lines: [],
+            pct: {},
           }}
         />
         <p className="small" style={{ marginTop: "var(--space-4)" }}>

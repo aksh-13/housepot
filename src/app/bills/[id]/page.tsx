@@ -62,13 +62,26 @@ export default async function BillPage({ params, searchParams }: Props) {
                 description: bill.description,
                 total: typed(bill.totalCents),
                 paidBy: bill.paidByMemberId,
-                split: bill.subtotalCents === null ? "equal" : "receipt",
+                split: bill.splitKind,
                 sharers: bill.shares.map((s) => s.memberId),
                 subtotal: bill.subtotalCents === null ? "" : typed(bill.subtotalCents),
-                own: Object.fromEntries(
+                own:
+                  bill.splitKind === "receipt"
+                    ? Object.fromEntries(
+                        bill.shares
+                          .filter((s) => s.ownCents !== null)
+                          .map((s) => [s.memberId, typed(s.ownCents ?? 0)]),
+                      )
+                    : {},
+                lines: bill.items.map((i) => ({
+                  name: i.name,
+                  price: typed(i.priceCents),
+                  who: i.memberIds,
+                })),
+                pct: Object.fromEntries(
                   bill.shares
-                    .filter((s) => s.ownCents !== null)
-                    .map((s) => [s.memberId, typed(s.ownCents ?? 0)]),
+                    .filter((s) => s.percentBp !== null)
+                    .map((s) => [s.memberId, String(Number(((s.percentBp ?? 0) / 100).toFixed(2)))]),
                 ),
               }}
             />

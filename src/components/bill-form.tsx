@@ -1,19 +1,35 @@
 "use client";
 
-import { useState } from "react";
-import { parseDollars, splitBill } from "@/domain/split";
+import { useRef, useState } from "react";
+import { parseReceiptText } from "@/domain/receipt";
+import {
+  equalPercents,
+  formatPercent,
+  type ItemLine,
+  MAX_ITEMS,
+  parseDollars,
+  parsePercent,
+  splitBill,
+} from "@/domain/split";
 import { formatCents } from "@/money";
 import { SubmitButton } from "./buttons";
+
+type Split = "equal" | "receipt" | "items" | "percent";
+
+/** One line of an item-by-item bill, as typed. */
+export type LineValues = { name: string; price: string; who: string[] };
 
 /** What the form starts with. Money is text, exactly as it would be typed. */
 export type BillFormValues = {
   description: string;
   total: string;
   paidBy: string;
-  split: "equal" | "receipt";
+  split: Split;
   sharers: string[];
   subtotal: string;
   own: Record<string, string>;
+  lines: LineValues[];
+  pct: Record<string, string>;
 };
 
 type Props = {
@@ -28,6 +44,23 @@ type Props = {
   billId?: string;
 };
 
+const typedCents = (cents: number) => (cents / 100).toFixed(2);
+const typedPercent = (bp: number) => formatPercent(bp).replace("%", "");
+
+/** Makes a receipt photo easier to read: bigger, grey, with stronger contrast. */
+async function prepare(file: File): Promise<Blob> {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(2, 2000 / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(bitmap.width * scale);
+  canvas.height = Math.round(bitmap.height * scale);
+  const g = canvas.getContext("2d");
+  if (!g) return file;
+  g.filter = "grayscale(1) contrast(1.6)";
+  g.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  return new Promise((resolve) => canvas.toBlob((b) => resolve(b ?? file), "image/png"));
+}
+
 /**
  * The add-a-bill and edit-a-bill form. As the person types it shows what each housemate would pay,
  * using the same arithmetic the server uses. The server works it out again when the form is sent.
@@ -35,44 +68,157 @@ type Props = {
 export function BillForm({ members, meId, initial, action, token, billId }: Props) {
   const [total, setTotal] = useState(initial.total);
   const [paidBy, setPaidBy] = useState(initial.paidBy);
-  const [split, setSplit] = useState(initial.split);
+  const [split, setSplit] = useState<Split>(initial.split);
   const [sharers, setSharers] = useState(initial.sharers);
   const [subtotal, setSubtotal] = useState(initial.subtotal);
   const [own, setOwn] = useState(initial.own);
+  const nextKey = useRef(initial.lines.length);
+  const [lines, setLines] = useState(initial.lines.map((l, k) => ({ ...l, key: String(k) })));
+  const [pct, setPct] = useState(initial.pct);
+  const [scan, setScan] = useState<{ busy: boolean; message: string }>({ busy: false, message: "" });
 
   const label = (id: string) =>
     id === meId ? "You" : (members.find((m) => m.id === id)?.name ?? "Housemate");
   const ticked = members.filter((m) => sharers.includes(m.id));
+  const tickedIds = ticked.map((m) => m.id);
   const toggle = (id: string) =>
     setSharers((now) => (now.includes(id) ? now.filter((s) => s !== id) : [...now, id]));
 
+  const addLine = (line: Partial<LineValues> = {}) => {
+    const key = String(nextKey.current++);
+    setLines((now) => [...now, { key, name: "", price: "", who: tickedIds, ...line }]);
+  };
+  const changeLine = (key: string, change: Partial<LineValues>) =>
+    setLines((now) => now.map((l) => (l.key === key ? { ...l, ...change } : l)));
+  const toggleWho = (key: string, id: string) =>
+    setLines((now) =>
+      now.map((l) =>
+        l.key === key
+          ? { ...l, who: l.who.includes(id) ? l.who.filter((w) => w !== id) : [...l.who, id] }
+          : l,
+      ),
+    );
+
+  const choose = (next: Split) => {
+    setSplit(next);
+    // A fair starting point, so a percentage split is a nudge away rather than blank boxes.
+    if (next === "percent" && tickedIds.some((id) => !pct[id])) {
+      const even = equalPercents(tickedIds);
+      setPct(Object.fromEntries(tickedIds.map((id) => [id, typedPercent(even[id])])));
+    }
+    if (next === "items" && lines.length === 0) addLine();
+  };
+
+  /** Reads a receipt photo on this phone (nothing is uploaded) and fills in the lines to check. */
+  async function scanReceipt(file: File) {
+    setScan({ busy: true, message: "Getting the reader ready. The first time takes a few seconds." });
+    try {
+      const { createWorker } = await import("tesseract.js");
+      const worker = await createWorker("eng", undefined, {
+        logger: (m) => {
+          if (m.status === "recognizing text") {
+            setScan({ busy: true, message: `Reading the receipt… ${Math.round(m.progress * 100)}%` });
+          }
+        },
+      });
+      const { data } = await worker.recognize(await prepare(file));
+      await worker.terminate();
+      const read = parseReceiptText(data.text);
+      if (read.items.length === 0) {
+        setScan({
+          busy: false,
+          message:
+            "Could not find any prices in that photo. Try a flatter, brighter shot, or type the items.",
+        });
+        return;
+      }
+      setSplit("items");
+      nextKey.current = read.items.length;
+      setLines(
+        read.items.map((item, k) => ({
+          key: String(k),
+          name: item.name,
+          price: typedCents(item.priceCents),
+          who: tickedIds,
+        })),
+      );
+      if (read.subtotalCents !== null) setSubtotal(typedCents(read.subtotalCents));
+      if (read.totalCents !== null) setTotal(typedCents(read.totalCents));
+      const sum = read.items.reduce((s, i) => s + i.priceCents, 0);
+      setScan({
+        busy: false,
+        message: read.itemsMatchSubtotal
+          ? `Read ${read.items.length} items, and they add up to the subtotal. Tick who had each one.`
+          : `Read ${read.items.length} items adding up to ${formatCents(sum)}${read.subtotalCents !== null ? `, but the receipt says ${formatCents(read.subtotalCents)}` : ""}. Check them against the receipt before saving.`,
+      });
+    } catch {
+      setScan({ busy: false, message: "Could not read that photo here. Type the items instead." });
+    }
+  }
+
   // The same steps the server takes, so the preview never promises something the server refuses.
   const totalCents = parseDollars(total);
-  const subtotalCents = parseDollars(subtotal);
+  const typedSubtotal = parseDollars(subtotal);
+  let problem = "";
+
   const ownCents: Record<string, number> = {};
-  let ownTypo = false;
-  for (const m of ticked) {
-    const typed = (own[m.id] ?? "").trim();
-    if (!typed) continue;
-    const cents = parseDollars(typed);
-    if (cents === null) ownTypo = true;
-    else ownCents[m.id] = cents;
+  if (split === "receipt") {
+    for (const m of ticked) {
+      const typed = (own[m.id] ?? "").trim();
+      if (!typed) continue;
+      const cents = parseDollars(typed);
+      if (cents === null) problem = "One of the item amounts is not an amount of money.";
+      else ownCents[m.id] = cents;
+    }
   }
-  const ownSum = Object.values(ownCents).reduce((sum, cents) => sum + cents, 0);
-  const sharedCents = subtotalCents === null ? null : subtotalCents - ownSum;
+
+  const itemLines: ItemLine[] = [];
+  if (split === "items") {
+    for (const l of lines) {
+      const cents = parseDollars(l.price);
+      if (cents === null) {
+        if (l.price.trim()) problem = "One of the item prices is not an amount of money.";
+        continue;
+      }
+      itemLines.push({ priceCents: cents, memberIds: l.who.filter((id) => tickedIds.includes(id)) });
+    }
+  }
+  const itemsSum = itemLines.reduce((s, l) => s + l.priceCents, 0);
+  // An item-by-item bill with no subtotal typed takes the items' sum as the subtotal.
+  const subtotalCents = split === "items" && !subtotal.trim() && itemsSum > 0 ? itemsSum : typedSubtotal;
+
+  const percentBp: Record<string, number> = {};
+  if (split === "percent") {
+    for (const id of tickedIds) {
+      const bp = parsePercent(pct[id] ?? "");
+      if (bp === null) problem = "One of the percentages is not a number from 0 to 100.";
+      else percentBp[id] = bp;
+    }
+  }
+  const percentSum = Object.values(percentBp).reduce((s, bp) => s + bp, 0);
 
   let preview: { memberId: string; cents: number }[] = [];
-  let problem = "";
-  if (total.trim() && totalCents === null) problem = "The total is not an amount of money.";
-  else if (split === "receipt" && subtotal.trim() && subtotalCents === null) {
+  if (!problem && total.trim() && totalCents === null) problem = "The total is not an amount of money.";
+  else if (
+    !problem &&
+    split !== "equal" &&
+    split !== "percent" &&
+    subtotal.trim() &&
+    typedSubtotal === null
+  ) {
     problem = "The subtotal is not an amount of money.";
-  } else if (split === "receipt" && ownTypo) problem = "One of the item amounts is not an amount of money.";
-  else if (totalCents !== null && (split === "equal" || subtotalCents !== null)) {
+  } else if (
+    !problem &&
+    totalCents !== null &&
+    (split === "equal" || split === "percent" || subtotalCents !== null)
+  ) {
     const result = splitBill({
       totalCents,
       payerId: paidBy,
-      sharerIds: ticked.map((m) => m.id),
+      sharerIds: tickedIds,
       receipt: split === "receipt" && subtotalCents !== null ? { subtotalCents, ownCents } : undefined,
+      items: split === "items" && subtotalCents !== null ? { subtotalCents, lines: itemLines } : undefined,
+      percentBp: split === "percent" ? percentBp : undefined,
     });
     if (result.ok) preview = result.shares;
     else problem = result.error;
@@ -94,6 +240,27 @@ export function BillForm({ members, meId, initial, action, token, billId }: Prop
           defaultValue={initial.description}
           required
         />
+      </div>
+
+      <div className="scan">
+        <label className="btn btn-block" aria-disabled={scan.busy}>
+          {scan.busy ? "Reading…" : "Scan a receipt"}
+          <input
+            type="file"
+            accept="image/*"
+            className="visually-hidden"
+            disabled={scan.busy}
+            onChange={(e) => {
+              const file = e.currentTarget.files?.[0];
+              e.currentTarget.value = "";
+              if (file) void scanReceipt(file);
+            }}
+          />
+        </label>
+        <p className="hint">
+          {scan.message ||
+            "Read on this phone; the photo is not uploaded. It fills in the items for you to check."}
+        </p>
       </div>
 
       <div className="pair">
@@ -130,31 +297,27 @@ export function BillForm({ members, meId, initial, action, token, billId }: Prop
 
       <fieldset className="field">
         <legend className="legend">Split</legend>
-        <label className="check">
-          <input
-            type="radio"
-            name="split"
-            value="equal"
-            checked={split === "equal"}
-            onChange={() => setSplit("equal")}
-          />
-          <span>
-            <strong>Equally.</strong> Everyone ticked pays the same.
-          </span>
-        </label>
-        <label className="check">
-          <input
-            type="radio"
-            name="split"
-            value="receipt"
-            checked={split === "receipt"}
-            onChange={() => setSplit("receipt")}
-          />
-          <span>
-            <strong>By receipt.</strong> Each person pays for what they had, plus their part of the tax and
-            tip.
-          </span>
-        </label>
+        {(
+          [
+            ["equal", "Equally.", "Everyone ticked pays the same."],
+            ["items", "Item by item.", "Tick who had each line; tax and tip follow what each person had."],
+            ["receipt", "By each person's total.", "Type what each person's own items came to."],
+            ["percent", "By percentage.", "Like 60/40 for a bigger room."],
+          ] as const
+        ).map(([value, title, text]) => (
+          <label key={value} className="check">
+            <input
+              type="radio"
+              name="split"
+              value={value}
+              checked={split === value}
+              onChange={() => choose(value)}
+            />
+            <span>
+              <strong>{title}</strong> {text}
+            </span>
+          </label>
+        ))}
       </fieldset>
 
       <fieldset className="field">
@@ -173,49 +336,143 @@ export function BillForm({ members, meId, initial, action, token, billId }: Prop
         ))}
       </fieldset>
 
-      {split === "receipt" && (
-        <>
-          <div className="field">
-            <label htmlFor="subtotal">Subtotal before tax and tip</label>
+      {(split === "receipt" || split === "items") && (
+        <div className="field">
+          <label htmlFor="subtotal">Subtotal before tax and tip</label>
+          {/* Item by item, an empty subtotal means "the items' sum", so that is what is sent. */}
+          {split === "items" && (
             <input
-              id="subtotal"
+              type="hidden"
               name="subtotal"
-              className="input"
-              inputMode="decimal"
-              placeholder="50.00"
-              value={subtotal}
-              onChange={(e) => setSubtotal(e.target.value)}
-              required
+              value={subtotal.trim() || (itemsSum ? typedCents(itemsSum) : "")}
             />
-            <span className="hint">
-              The total above is what was actually paid. The difference is spread by what each person had.
-            </span>
-          </div>
-          <fieldset className="field">
-            <legend className="legend">What each person's own items came to, before tax</legend>
-            {ticked.map((m) => (
-              <div key={m.id} className="row">
-                <label htmlFor={`own-${m.id}`}>{label(m.id)}</label>
-                <span className="leader" />
+          )}
+          <input
+            id="subtotal"
+            name={split === "items" ? undefined : "subtotal"}
+            className="input"
+            inputMode="decimal"
+            placeholder={split === "items" && itemsSum ? typedCents(itemsSum) : "50.00"}
+            value={subtotal}
+            onChange={(e) => setSubtotal(e.target.value)}
+            required={split === "receipt"}
+          />
+          <span className="hint">
+            The total above is what was actually paid. The difference is spread by what each person had.
+            {split === "items" && !subtotal.trim() ? " Left empty, the items' sum is used." : ""}
+          </span>
+        </div>
+      )}
+
+      {split === "receipt" && (
+        <fieldset className="field">
+          <legend className="legend">What each person's own items came to, before tax</legend>
+          {ticked.map((m) => (
+            <div key={m.id} className="row">
+              <label htmlFor={`own-${m.id}`}>{label(m.id)}</label>
+              <span className="leader" />
+              <input
+                id={`own-${m.id}`}
+                name={`own:${m.id}`}
+                className="input own-items"
+                inputMode="decimal"
+                placeholder="0.00"
+                value={own[m.id] ?? ""}
+                onChange={(e) => setOwn((now) => ({ ...now, [m.id]: e.target.value }))}
+              />
+            </div>
+          ))}
+          <span className="hint">Leave a box empty for someone who only had shared things.</span>
+        </fieldset>
+      )}
+
+      {split === "items" && (
+        <fieldset className="field">
+          <legend className="legend">Items, before tax</legend>
+          {lines.map((l) => (
+            <div key={l.key} className="item-line">
+              <input type="hidden" name="line" value={l.key} />
+              <div className="pair">
                 <input
-                  id={`own-${m.id}`}
-                  name={`own:${m.id}`}
+                  name={`line:${l.key}:name`}
+                  className="input"
+                  placeholder="Item"
+                  maxLength={40}
+                  aria-label="Item"
+                  value={l.name}
+                  onChange={(e) => changeLine(l.key, { name: e.target.value })}
+                />
+                <input
+                  name={`line:${l.key}:price`}
                   className="input own-items"
                   inputMode="decimal"
                   placeholder="0.00"
-                  value={own[m.id] ?? ""}
-                  onChange={(e) => setOwn((now) => ({ ...now, [m.id]: e.target.value }))}
+                  aria-label={`Price of ${l.name || "item"}`}
+                  value={l.price}
+                  onChange={(e) => changeLine(l.key, { price: e.target.value })}
                 />
               </div>
-            ))}
-            <span className="hint">
-              Leave a box empty for someone who only had shared things.
-              {sharedCents !== null && sharedCents >= 0 && !ownTypo
-                ? ` Shared between everyone ticked: ${formatCents(sharedCents)}.`
-                : ""}
-            </span>
-          </fieldset>
-        </>
+              <div className="who">
+                {ticked.map((m) => (
+                  <label key={m.id} className="chip">
+                    <input
+                      type="checkbox"
+                      name={`line:${l.key}:who`}
+                      value={m.id}
+                      checked={l.who.includes(m.id)}
+                      onChange={() => toggleWho(l.key, m.id)}
+                    />
+                    <span>{label(m.id)}</span>
+                  </label>
+                ))}
+                <button
+                  type="button"
+                  className="btn-quiet"
+                  onClick={() => setLines((now) => now.filter((x) => x.key !== l.key))}
+                >
+                  Remove
+                </button>
+              </div>
+            </div>
+          ))}
+          {lines.length < MAX_ITEMS && (
+            <button type="button" className="btn" onClick={() => addLine()}>
+              Add an item
+            </button>
+          )}
+          <span className="hint">
+            {itemLines.length > 0
+              ? `Items so far: ${formatCents(itemsSum)}. Anything left of the subtotal is shared by everyone ticked.`
+              : "Each line is split between whoever is ticked on it."}
+          </span>
+        </fieldset>
+      )}
+
+      {split === "percent" && (
+        <fieldset className="field">
+          <legend className="legend">Each person's percentage</legend>
+          {ticked.map((m) => (
+            <div key={m.id} className="row">
+              <label htmlFor={`pct-${m.id}`}>{label(m.id)}</label>
+              <span className="leader" />
+              <input
+                id={`pct-${m.id}`}
+                name={`pct:${m.id}`}
+                className="input own-items"
+                inputMode="decimal"
+                placeholder="0"
+                value={pct[m.id] ?? ""}
+                onChange={(e) => setPct((now) => ({ ...now, [m.id]: e.target.value }))}
+              />
+              <span className="small muted">%</span>
+            </div>
+          ))}
+          <span className="hint">
+            {percentSum === 10_000
+              ? "Adds up to 100%."
+              : `Adds up to ${formatPercent(percentSum)} so far; it needs to be 100%.`}
+          </span>
+        </fieldset>
       )}
 
       <section className="receipt" aria-live="polite">
