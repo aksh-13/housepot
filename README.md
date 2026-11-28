@@ -27,7 +27,12 @@ The full design, with the reasons behind each rule, is in [`docs/superpowers/spe
 In a house that settles up by e-Transfer, the same balance also tracks shared bills.
 
 - Anyone adds a bill: what it was, the total, who paid, and who shares it. Each sharer's part moves from their balance to the payer's.
-- **Split equally**, or **by receipt**: type the subtotal, the total paid, and what each person's own items came to. Anything left of the subtotal is shared equally, and tax and tip are spread in proportion to what each person had. On a $50 subtotal that came to $56.50, $30 of items costs $33.90 and $20 of items costs $22.60.
+- Four ways to split:
+  - **Equally** between everyone ticked.
+  - **Item by item:** each line of the receipt with its price, and who had it. A line is split between whoever is ticked on it; anything left of the subtotal is shared equally; tax and tip follow what each person had. An empty subtotal means the items' sum.
+  - **By each person's total:** type what each person's own items came to. On a $50 subtotal that came to $56.50, $30 of items costs $33.90 and $20 of items costs $22.60.
+  - **By percentage**, like 60/40 for a bigger room. The percentages must add up to 100.
+- **Scan a receipt:** the bill form reads a photo of the receipt on the phone with [Tesseract](https://github.com/naptha/tesseract.js) (no AI model, and the photo is not uploaded), then fills in the items, subtotal and total for the person to check. It says whether the items add up to the subtotal, the best sign the read was right. The rules that turn the text into lines are in `src/domain/receipt.ts`. The first scan downloads the reader and its English data from a CDN (jsDelivr), which the browser then keeps.
 - The parts always add up to the total. An odd cent goes to whoever paid.
 - The home screen shows the fewest payments that would square the house up right now. They become real debts at the next settle-up.
 - Any housemate can edit or delete a bill until a settle-up has happened. Every change shows in the activity feed, and nothing is erased from the ledger: an edit or delete writes opposite entries.
@@ -121,7 +126,7 @@ curl -X POST -H "Authorization: Bearer dev-tick-secret" http://localhost:3000/ap
 ### Tests and checks
 
 ```sh
-pnpm test        # 418 tests against a real Postgres (pnpm db:up starts it)
+pnpm test        # 437 tests against a real Postgres (pnpm db:up starts it)
 pnpm lint        # Biome: lint and formatting
 pnpm typecheck
 pnpm build
@@ -181,6 +186,7 @@ src/domain/      the rules, as plain functions that take a database and a time
   settleup.ts    e-Transfer houses: settling up (one person or the whole house), debts, reminders, the live "to square up" list
   split.ts       who owes what on a bill (plain arithmetic, also used by the form's preview)
   bills.ts       shared bills: add, edit, delete, and their ledger entries
+  receipt.ts     turning a scanned receipt's text into bill lines
   teams.ts       cleaning teams: who is on duty, who is on which team, nudges
   inbound.ts     forwarded Interac emails: matching payments and money requests
   interac.ts     reading Interac's emails (wording not yet checked against real ones)
@@ -266,7 +272,7 @@ The app never holds money in this setup, so it needs no payment account. It has 
 - In an e-Transfer house nothing forces anyone to pay. An overdue debt blocks claiming bounties and everyone can see it, and that is all.
 - Settling up closes any chore that is up for grabs and shares its money out, like the end of term in a card house.
 - A finished chore counts after 48 hours unless most of the house says it was not done, so a house that never votes approves everything.
-- Item-by-item receipts and reading a receipt from a photo are planned next (see `docs/superpowers/specs/2026-11-27-approvals-and-chore-worth-design.md`).
 - One house per person.
-- Bills are split equally or by per-person receipt amounts. Item-by-item receipts, percentages, repeating bills and reading a receipt from a photo are not built.
+- Repeating bills (rent every month) are not built.
+- Receipt scanning has only been tried on generated receipt images, not real photos of crumpled thermal paper. Expect to fix a few lines by hand, and expect faded receipts to read badly.
 - Bills are for e-Transfer houses only.
