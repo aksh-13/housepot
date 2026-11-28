@@ -1,3 +1,4 @@
+import Link from "next/link";
 import {
   autoReloadAction,
   closeVoteAction,
@@ -226,6 +227,15 @@ export default async function SettingsPage({ searchParams }: Props) {
 
       <section className="section stack">
         <h2 className="label">You</h2>
+        <div className="setting">
+          <div>
+            <h3>How Housepot works</h3>
+            <p>The rules in five lines, the house's chores and their worth.</p>
+          </div>
+          <Link className="btn" href="/welcome">
+            Open
+          </Link>
+        </div>
         {!etransfer && (
           <div className="setting">
             <div>

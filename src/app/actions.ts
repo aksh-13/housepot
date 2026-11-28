@@ -9,6 +9,7 @@ import { createChore, ensureTurns, updateChore } from "@/domain/chores";
 import { fakeReceivedEmail, fakeRequestEmail } from "@/domain/fakeInterac";
 import {
   createHouse,
+  finishOnboarding,
   joinHouse,
   memberById,
   normalizeEmail,
@@ -32,7 +33,16 @@ import {
   textNewDebts,
 } from "@/domain/settleup";
 import { answerSwap, cancelSwap, requestSwap } from "@/domain/swaps";
-import { addNudge, addTeam, removeNudge, removeTeam, saveTeams, sendNudge } from "@/domain/teams";
+import {
+  addNudge,
+  addTeam,
+  joinTeam,
+  removeNudge,
+  removeTeam,
+  saveTeams,
+  sendNudge,
+  setUpTeams,
+} from "@/domain/teams";
 import { assignTurn } from "@/domain/turns";
 import { voteOnProposal } from "@/domain/worth";
 import {
@@ -111,15 +121,26 @@ async function ensureName(userId: string, current: string | null, given: string)
 export async function createHouseAction(fd: FormData): Promise<void> {
   const user = await requireUser("/new");
   if (!(await ensureName(user.id, user.name, str(fd, "name")))) back("/new", "error", "Tell us your name.");
+  const now = new Date();
   const created = await createHouse(getDb(), {
     userId: user.id,
     houseName: str(fd, "houseName"),
     depositCents: dollarsToCents(str(fd, "deposit") || "20"),
     moneyMode: str(fd, "moneyMode") === "card" ? "card" : "etransfer",
-    now: new Date(),
+    now,
   });
   if (!created.ok) back("/new", "error", created.error);
-  redirect("/house");
+  if (str(fd, "sharing") === "teams") {
+    const teams = await setUpTeams(getDb(), {
+      houseId: created.houseId,
+      memberId: created.memberId,
+      count: Number(str(fd, "teamCount") || "2"),
+      weeks: Number(str(fd, "teamWeeks") || "1"),
+      now,
+    });
+    if (!teams.ok) back("/welcome", "error", teams.error);
+  }
+  redirect("/welcome");
 }
 
 export async function joinHouseAction(fd: FormData): Promise<void> {
@@ -129,7 +150,7 @@ export async function joinHouseAction(fd: FormData): Promise<void> {
   if (!(await ensureName(user.id, user.name, str(fd, "name")))) back(path, "error", "Tell us your name.");
   const joined = await joinHouse(getDb(), { userId: user.id, inviteCode: code, now: new Date() });
   if (!joined.ok) back(path, "error", joined.error);
-  redirect("/house");
+  redirect("/welcome");
 }
 
 /** Settings: change the name housemates see. */
@@ -350,8 +371,9 @@ export async function addChoreAction(fd: FormData): Promise<void> {
     teamDuty: str(fd, "doneBy") === "team",
     now,
   });
-  if (!created.ok) back("/house/chores", "error", created.error);
+  if (!created.ok) back(welcomeStep(fd, true) ?? "/house/chores", "error", created.error);
   await ensureTurns(getDb(), house.id, now);
+  if (welcomeStep(fd, true)) back(welcomeStep(fd, true)!, "notice", `${str(fd, "name")} added.`);
   back(
     "/house/chores",
     "notice",
@@ -419,6 +441,30 @@ export async function worthVoteAction(fd: FormData): Promise<void> {
         ? "Most of the house said no, so it does not go ahead."
         : "Vote counted.",
   );
+}
+
+// ── First-run walkthrough ─────────────────────────────────────────────────────
+
+/**
+ * Forms in the walkthrough carry the step they came from ("here") and the one to go to ("next"),
+ * so a saved form moves the walkthrough on, and a refused one shows its error on the same step.
+ */
+function welcomeStep(fd: FormData, here = false): string | null {
+  const step = str(fd, here ? "welcomeHere" : "welcomeNext");
+  return /^[a-z]+$/.test(step) ? `/welcome?step=${step}` : null;
+}
+
+export async function joinTeamAction(fd: FormData): Promise<void> {
+  const { member } = await requireMember("/welcome");
+  const joined = await joinTeam(getDb(), { memberId: member.id, teamId: str(fd, "teamId"), now: new Date() });
+  if (!joined.ok) back(welcomeStep(fd, true) ?? "/teams", "error", joined.error);
+  back(welcomeStep(fd) ?? "/teams", "notice", "You are on the team.");
+}
+
+export async function finishWelcomeAction(): Promise<void> {
+  const { member } = await requireMember("/welcome");
+  await finishOnboarding(getDb(), member.id, new Date());
+  redirect("/house");
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────────
@@ -628,8 +674,9 @@ export async function savePayoutAction(fd: FormData): Promise<void> {
     etransferEmail: str(fd, "etransferEmail"),
     bank: str(fd, "bank"),
   });
-  if (!saved.ok) back("/house/settings", "error", saved.error);
-  back(str(fd, "back") === "settle" ? "/settle" : "/house/settings", "notice", "Saved.");
+  const to = welcomeStep(fd) ?? (str(fd, "back") === "settle" ? "/settle" : "/house/settings");
+  if (!saved.ok) back(welcomeStep(fd, true) ?? "/house/settings", "error", saved.error);
+  back(to, "notice", "Saved.");
 }
 
 /** "Settle up now": turns the balances into payments straight away. Any housemate, no vote. */

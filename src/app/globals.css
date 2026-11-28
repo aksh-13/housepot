@@ -915,3 +915,29 @@ form > .receipt {
 .proof-status {
   margin-top: var(--space-3);
 }
+
+/* The first-run walkthrough's progress dots. */
+.welcome-dots {
+  display: flex;
+  gap: var(--space-2);
+  list-style: none;
+  padding: 0;
+  margin: var(--space-4) 0 var(--space-2);
+}
+.welcome-dots li a {
+  display: block;
+  width: 28px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--rule);
+}
+.welcome-dots li.done a {
+  background: var(--ink-3);
+}
+.welcome-dots li.here a {
+  background: var(--accent);
+}
+.swap,
+.swap-asked {
+  margin-top: var(--space-3);
+}

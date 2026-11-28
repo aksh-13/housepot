@@ -319,3 +319,57 @@ export async function sendNudge(
   });
   return { ok: true, sentTo: recipients.length, teamName: duty.team.name };
 }
+
+/**
+ * Someone puts themselves on a team, for instance when they join a house that already has teams.
+ * Team chores already handed out stay where they are; the next ones count them in.
+ */
+export async function joinTeam(
+  db: Db,
+  a: { memberId: string; teamId: string; now: Date },
+): Promise<{ ok: true } | Fail> {
+  const member = await memberById(db, a.memberId);
+  if (!member || member.status === "left") return fail("Only housemates can do that.");
+  const team = await db.query<{ name: string }>(
+    "select name from teams where id::text = $1 and house_id = $2",
+    [a.teamId, member.houseId],
+  );
+  if (!team.rows[0]) return fail("Pick one of this house's teams.");
+  await db.query("update members set team_id = $2 where id = $1", [a.memberId, a.teamId]);
+  await logActivity(db, {
+    houseId: member.houseId,
+    memberId: a.memberId,
+    kind: "joined_team",
+    data: { name: team.rows[0].name },
+    now: a.now,
+  });
+  return { ok: true };
+}
+
+/**
+ * Sets a new house up with teams from the start: this many teams, each on duty for this many
+ * weeks, with the person setting it up on the first one. Everyone else is placed as they join.
+ */
+export async function setUpTeams(
+  db: Db,
+  a: { houseId: string; memberId: string; count: number; weeks: number; now: Date },
+): Promise<{ ok: true } | Fail> {
+  const count = Math.min(Math.max(Math.trunc(a.count), 2), MAX_TEAMS);
+  const ids: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const added = await addTeam(db, { houseId: a.houseId, memberId: a.memberId, now: a.now });
+    if (!added.ok) return added;
+    ids.push(added.teamId);
+  }
+  const house = await getHouse(db, a.houseId);
+  if (!house?.teamStart) return fail("Could not start the teams.");
+  return saveTeams(db, {
+    houseId: a.houseId,
+    memberId: a.memberId,
+    weeks: a.weeks,
+    startDate: house.teamStart,
+    names: {},
+    assignments: { [a.memberId]: ids[0] },
+    now: a.now,
+  });
+}

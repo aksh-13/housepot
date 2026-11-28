@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import {
   approvalVoteAction,
   assignTurnAction,
@@ -24,7 +25,7 @@ import { listChores } from "@/domain/chores";
 import { houseBalances } from "@/domain/ledger";
 import { debtsForUser, houseSquareUp } from "@/domain/settleup";
 import { openSwaps, type SwapView } from "@/domain/swaps";
-import { listNudges, teamOnDuty } from "@/domain/teams";
+import { listNudges, listTeams, teamOnDuty } from "@/domain/teams";
 import { DONE_OPENS_MS } from "@/domain/turns";
 import { houseTurns, type TurnView } from "@/domain/views";
 import { openProposals } from "@/domain/worth";
@@ -110,6 +111,8 @@ function describe(item: ActivityItem, meId: string): { text: string; cents?: num
           ? `${who} swapped with ${item.data.fromName}: ${chore} for ${item.data.backChoreName}`
           : `${who} took ${chore} for ${item.data.fromName}`,
       };
+    case "joined_team":
+      return { text: `${who} joined ${item.data.name}` };
     case "proof_sent":
       return { text: `${who} sent photos for ${chore}` };
     case "proof_rejected":
@@ -300,6 +303,8 @@ function ProofStatus({
 
 export default async function HousePage({ searchParams }: Props) {
   const { user, member, house } = await requireMember();
+  // Someone new goes through the walkthrough first.
+  if (!member.onboardedAt) redirect("/welcome");
   const db = getDb();
   const now = new Date();
   const etransfer = house.moneyMode === "etransfer";
@@ -312,12 +317,17 @@ export default async function HousePage({ searchParams }: Props) {
     etransfer ? debtsForUser(db, user.id) : Promise.resolve([]),
     etransfer ? houseSquareUp(db, house.id) : Promise.resolve({ lines: [], unclaimedCents: 0 }),
   ]);
-  const [duty, nudges, proposals, swaps] = await Promise.all([
+  const [duty, nudges, proposals, swaps, teams] = await Promise.all([
     teamOnDuty(db, house.id, now),
     listNudges(db, house.id),
     openProposals(db, house.id),
     openSwaps(db, house.id),
+    listTeams(db, house.id),
   ]);
+  // People on no team are never on duty, so a house with teams should place everyone.
+  const placed = new Set(teams.flatMap((t) => t.memberIds));
+  const unplaced =
+    teams.length > 0 ? balances.filter((b) => b.status === "active" && !placed.has(b.memberId)) : [];
   // The viewer's own payments first: what they pay, what they get, then everyone else's.
   const involvesMe = (l: { fromMemberId: string; toMemberId: string }) =>
     l.fromMemberId === member.id || l.toMemberId === member.id;
@@ -401,6 +411,17 @@ export default async function HousePage({ searchParams }: Props) {
               Tap one to email everyone on {duty.team.name}.
             </p>
           )}
+        </section>
+      )}
+
+      {unplaced.length > 0 && (
+        <section className="callout">
+          <h2>Put people on teams</h2>
+          <p>
+            {unplaced.map((b) => (b.memberId === member.id ? "You" : b.name)).join(", ")}{" "}
+            {unplaced.length === 1 ? "is" : "are"} on no team, so never on duty.{" "}
+            <Link href="/teams">Sort it out on the Teams tab</Link>
+          </p>
         </section>
       )}
 
