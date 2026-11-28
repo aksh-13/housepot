@@ -96,8 +96,8 @@ function ChoreFields({
             <option value="person">One person at a time, round the whole house</option>
           </select>
           <span className="hint">
-            A team chore is given to someone on the team on duty. Anyone on that team can do it, it cannot be
-            skipped, and a miss is shared by the team.
+            A team chore is given to someone on the team on duty. Anyone on that team can do it, and if it
+            expires its worth is shared by the team.
           </span>
         </div>
       )}
@@ -114,7 +114,7 @@ function ChoreFields({
           />
         </div>
         <div className="field">
-          <label htmlFor={id("price")}>Skip price ($)</label>
+          <label htmlFor={id("price")}>Worth ($)</label>
           <input
             id={id("price")}
             name="skipPrice"
@@ -163,7 +163,7 @@ export default async function ChoresPage({ searchParams }: Props) {
               <summary>
                 <span className="name">{chore.name}</span>
                 <span className="small muted">
-                  {scheduleLabel(chore.schedule)}, {timeLabel(chore.deadlineTime)} ·{" "}
+                  {scheduleLabel(chore.schedule)}, {timeLabel(chore.deadlineTime)} · worth{" "}
                   {formatCents(chore.skipPriceCents)}
                   {waiting.has(chore.id) && (
                     <>

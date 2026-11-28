@@ -1,8 +1,7 @@
 import type { Db } from "@/db";
-import { formatCents } from "@/money";
 import { logActivity } from "./activity";
 import { memberById } from "./houses";
-import { choreBounty, memberBalance, transfer } from "./ledger";
+import { choreBounty, transfer } from "./ledger";
 import { hasOverdueDebt } from "./settleup";
 
 export type Result = { ok: true; payoutCents?: number } | { ok: false; error: string };
@@ -52,16 +51,16 @@ export async function lockChoreOfTurn(t: Db, turnId: string): Promise<void> {
   );
 }
 
-/** A member who leaves with turns waiting on them is charged as if they had skipped each one. */
-export async function skipWaitingTurnsOf(t: Db, memberId: string, now: Date): Promise<void> {
+/** A member who leaves with turns waiting on them is charged as if each one had expired. */
+export async function expireWaitingTurnsOf(t: Db, memberId: string, now: Date): Promise<void> {
   const waiting = await t.query<{ id: string }>(
-    // A team's turn is not waiting on any one person, so leaving does not skip it.
+    // A team's turn is not waiting on any one person, so leaving does not expire it.
     "select id from turns where assignee_member_id = $1 and status = 'assigned' and team_id is null order by due_at",
     [memberId],
   );
   for (const row of waiting.rows) {
     const turn = await lockTurn(t, row.id);
-    if (turn && turn.status === "assigned") await openTurn(t, turn, "skip", now);
+    if (turn && turn.status === "assigned") await openTurn(t, turn, "miss", now);
   }
 }
 
@@ -78,13 +77,8 @@ async function rollOlderOpenTurns(t: Db, choreId: string, exceptTurnId: string):
   ]);
 }
 
-/** Charges the assignee the skip price and opens the chore to the whole house. */
-export async function openTurn(
-  t: Db,
-  turn: TurnRow,
-  reason: "skip" | "miss" | "dispute",
-  now: Date,
-): Promise<void> {
+/** Charges the assignee the chore's worth and opens the chore to the whole house. */
+export async function openTurn(t: Db, turn: TurnRow, reason: "miss" | "dispute", now: Date): Promise<void> {
   if (turn.team_id) {
     // The whole team shares a miss equally. Odd cents fall on the first people in rotation order.
     const team = await t.query<{ id: string }>(
@@ -111,7 +105,7 @@ export async function openTurn(
       from: { memberId: turn.assignee_member_id },
       to: { choreId: turn.chore_id },
       amountCents: turn.skip_price_cents,
-      kind: reason === "skip" ? "skip" : "miss",
+      kind: "miss",
       turnId: turn.id,
     });
   }
@@ -124,7 +118,7 @@ export async function openTurn(
   await logActivity(t, {
     houseId: turn.house_id,
     memberId: turn.team_id ? null : turn.assignee_member_id,
-    kind: reason === "skip" ? "skipped" : reason === "miss" ? "missed" : "dispute_passed",
+    kind: reason === "miss" ? "missed" : "dispute_passed",
     data: {
       turnId: turn.id,
       choreName: turn.chore_name,
@@ -218,33 +212,6 @@ export async function markDone(db: Db, a: DoneArgs): Promise<Result> {
       now: a.now,
     });
     return { ok: true as const, payoutCents };
-  });
-}
-
-type SkipArgs = { turnId: string; memberId: string; now: Date };
-
-/** The assignee pays the skip price before the deadline instead of doing the chore. */
-export async function payToSkip(db: Db, a: SkipArgs): Promise<Result> {
-  return db.tx(async (t) => {
-    const turn = await lockTurn(t, a.turnId);
-    if (!turn || turn.status !== "assigned") return fail("This turn is no longer waiting.");
-    // One person must not be able to spend their teammates' money.
-    if (turn.team_id) {
-      return fail(
-        "A team chore cannot be skipped. Someone on the team does it, or the whole team is charged.",
-      );
-    }
-    if (turn.assignee_member_id !== a.memberId) return fail("It is not your turn.");
-    if (a.now.getTime() > turn.due_at.getTime()) return fail("The deadline has passed.");
-    // A card house only lets you skip with money you have paid in. In an e-Transfer house the
-    // balance is a scoreboard, so skipping can take it below zero and the debt is settled later.
-    if (turn.money_mode === "card" && (await memberBalance(t, a.memberId)) < turn.skip_price_cents) {
-      return fail(
-        `You need at least ${formatCents(turn.skip_price_cents)} in your balance to skip. Top up first.`,
-      );
-    }
-    await openTurn(t, turn, "skip", a.now);
-    return { ok: true as const };
   });
 }
 

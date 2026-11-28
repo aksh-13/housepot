@@ -17,7 +17,7 @@ import {
   teamOnDuty,
 } from "@/domain/teams";
 import { runTick } from "@/domain/tick";
-import { assignTurn, claimBounty, markDone, missTurn, payToSkip, skipWaitingTurnsOf } from "@/domain/turns";
+import { assignTurn, claimBounty, expireWaitingTurnsOf, markDone, missTurn } from "@/domain/turns";
 import { houseTurns } from "@/domain/views";
 import { fakePayments } from "@/providers/payments";
 import { fakeSms } from "@/providers/sms";
@@ -150,16 +150,6 @@ describe("a chore for the team on duty", () => {
     expect(await balances()).toEqual([0, 0, 0, 0]);
   });
 
-  test("it cannot be skipped for a price", async () => {
-    await garbage();
-    const turn = await waiting();
-    expect(await payToSkip(db, { turnId: turn.id, memberId: ana, now: NOW })).toEqual({
-      ok: false,
-      error: "A team chore cannot be skipped. Someone on the team does it, or the whole team is charged.",
-    });
-    expect(await balances()).toEqual([0, 0, 0, 0]);
-  });
-
   test("a miss charges everyone on the team an equal share, and nobody else", async () => {
     const choreId = await garbage();
     const turn = await waiting();
@@ -214,8 +204,8 @@ describe("a chore for the team on duty", () => {
 
   test("someone leaving is not charged for a turn that belongs to their team", async () => {
     await garbage();
-    await db.tx((t) => skipWaitingTurnsOf(t, ana, NOW));
-    await db.tx((t) => skipWaitingTurnsOf(t, ben, NOW));
+    await db.tx((t) => expireWaitingTurnsOf(t, ana, NOW));
+    await db.tx((t) => expireWaitingTurnsOf(t, ben, NOW));
     expect(await balances()).toEqual([0, 0, 0, 0]);
     expect((await waiting()).team_id).toBe(teamA);
   });

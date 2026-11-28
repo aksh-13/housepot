@@ -6,7 +6,7 @@ import { DISPUTE_WINDOW_MS } from "./disputes";
 import { activeMembers, getHouse, memberById } from "./houses";
 import { choreBounty, memberBalance, transfer } from "./ledger";
 import { type CreatedDebt, settleUpHouse } from "./settleup";
-import { skipWaitingTurnsOf } from "./turns";
+import { expireWaitingTurnsOf } from "./turns";
 
 export type CashOut = { refundedCents: number; manualCents: number; writtenOffCents: number };
 
@@ -139,7 +139,7 @@ type LeaveResult = { ok: true; debts?: CreatedDebt[] } | { ok: false; error: str
 
 /**
  * Cashes the member out and removes them from the house and its rotation.
- * Leaving is not a way out of a charge: a turn that is waiting on them counts as skipped, and they
+ * Leaving is not a way out of a charge: a turn that is waiting on them counts as expired, and they
  * cannot leave while a chore they just finished can still be disputed.
  */
 export async function leaveHouse(
@@ -166,7 +166,7 @@ export async function leaveHouse(
     // Nothing to cash out: the whole house settles up, so the leaver ends at zero and any money
     // they owe or are owed becomes an ordinary debt that outlives their membership.
     const debts = await db.tx(async (t) => {
-      await skipWaitingTurnsOf(t, a.memberId, a.now);
+      await expireWaitingTurnsOf(t, a.memberId, a.now);
       const created = await settleUpHouse(t, { houseId: member.houseId, now: a.now, reason: "leaving" });
       await t.query("update members set status = 'left' where id = $1", [a.memberId]);
       await t.query("delete from close_votes where member_id = $1", [a.memberId]);
@@ -176,7 +176,7 @@ export async function leaveHouse(
     return { ok: true, debts };
   }
   await db.tx(async (t) => {
-    await skipWaitingTurnsOf(t, a.memberId, a.now);
+    await expireWaitingTurnsOf(t, a.memberId, a.now);
     await cashOutMember(t, payments, a);
     await t.query("update members set status = 'left', auto_reload = false where id = $1", [a.memberId]);
     await t.query("delete from close_votes where member_id = $1", [a.memberId]);

@@ -75,7 +75,8 @@ export default async function NewHousePage({ searchParams }: Props) {
                   <option value="60">$60</option>
                 </select>
                 <span className="hint">
-                  You get back whatever is left at the end of term. A skipped chore costs $5 by default.
+                  You get back whatever is left at the end of term. An expired chore costs its worth, $5 by
+                  default.
                 </span>
               </div>
             </>

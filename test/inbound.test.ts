@@ -12,9 +12,9 @@ import { forwardingAddress, handleInboundEmail, type InboundEmail } from "@/doma
 import { allowedRequestUrl, isFromInterac, parseInteracEmail } from "@/domain/interac";
 import { savePhoto } from "@/domain/photos";
 import { type CreatedDebt, settleUpHouse } from "@/domain/settleup";
-import { claimBounty, payToSkip } from "@/domain/turns";
+import { claimBounty } from "@/domain/turns";
 import { diskStorage } from "@/providers/storage";
-import { db, makeHouse, resetDb, type TestHouse } from "./helpers";
+import { db, expireTurn, makeHouse, resetDb, type TestHouse } from "./helpers";
 
 const NOW = new Date("2026-11-11T17:00:00Z");
 const DEC_1 = new Date("2026-12-01T14:00:00Z");
@@ -43,7 +43,7 @@ beforeEach(async () => {
   if (!chore.ok) throw new Error(chore.error);
   await ensureTurns(db, house.houseId, NOW);
   const turn = (await db.query("select id from turns where status = 'assigned'")).rows[0];
-  await payToSkip(db, { turnId: turn.id, memberId: a, now: NOW });
+  await expireTurn(turn.id, NOW);
   const photo = await savePhoto(db, storage, {
     houseId: house.houseId,
     memberId: b,

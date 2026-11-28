@@ -52,8 +52,8 @@ export default async function JoinPage({ params, searchParams }: Props) {
           With {mates.join(", ")}.{" "}
           {house.moneyMode === "etransfer" ? (
             <>
-              Nobody pays in. Skip a chore and it costs you; do someone else's and you earn it. Housemates
-              square up with each other by e-Transfer whenever they like.
+              Nobody pays in. Let a chore expire and it costs you; do someone else's and you earn it.
+              Housemates square up with each other by e-Transfer whenever they like.
             </>
           ) : (
             <>

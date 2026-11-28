@@ -199,7 +199,7 @@ test("you cannot leave within 24 hours of finishing a chore, while it can still 
   expect((await leaveHouse(db, payments, { memberId: ids[0], now: after(NOW, 25) })).ok).toBe(true);
 });
 
-test("leaving while it is your turn counts as skipping it", async () => {
+test("leaving while it is your turn counts as letting it expire", async () => {
   const { house, ids, choreId } = await houseWithGarbage(3);
   const payments = fakePayments();
   const turnId = await waitingTurnId(house.houseId);
@@ -211,7 +211,7 @@ test("leaving while it is your turn counts as skipping it", async () => {
   expect((await db.query("select status, opened_reason from turns where id = $1", [turnId])).rows[0]).toEqual(
     {
       status: "open",
-      opened_reason: "skip",
+      opened_reason: "miss",
     },
   );
 });

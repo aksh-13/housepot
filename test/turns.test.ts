@@ -5,7 +5,7 @@ import { beforeEach, expect, test } from "vitest";
 import { createChore, ensureTurns } from "@/domain/chores";
 import { choreBounty, memberBalance, transfer } from "@/domain/ledger";
 import { loadPhoto, savePhoto } from "@/domain/photos";
-import { claimBounty, markDone, missTurn, payToSkip } from "@/domain/turns";
+import { claimBounty, markDone, missTurn } from "@/domain/turns";
 import { diskStorage } from "@/providers/storage";
 import { db, makeHouse, resetDb, type TestHouse } from "./helpers";
 
@@ -111,36 +111,18 @@ test("done needs a photo from this house", async () => {
   expect(r).toEqual({ ok: false, error: "Add a photo of the finished chore." });
 });
 
-test("paying to skip moves the skip price to the chore and opens it to the house", async () => {
+test("there is no paid skip: a chore only costs its worth when it expires", async () => {
+  const turns = await import("@/domain/turns");
+  expect("payToSkip" in turns).toBe(false);
   const turn = await waitingTurn();
-  expect(await payToSkip(db, { turnId: turn.id, memberId: a, now: NOW })).toEqual({ ok: true });
-  expect(await balances()).toEqual([1500, 2000, 2000]);
-  expect(await choreBounty(db, choreId)).toBe(500);
-  expect(await turnRow(turn.id)).toMatchObject({ status: "open", opened_reason: "skip" });
-});
-
-test("you cannot skip with less than the skip price in your balance", async () => {
-  await transfer(db, {
-    houseId: house.houseId,
-    from: { memberId: a },
-    to: "external",
-    amountCents: 1700,
-    kind: "cashout_manual",
+  expect(await missTurn(db, { turnId: turn.id, now: NOW })).toEqual({
+    ok: false,
+    error: "The deadline has not passed yet.",
   });
-  const turn = await waitingTurn();
-  const r = await payToSkip(db, { turnId: turn.id, memberId: a, now: NOW });
-  expect(r).toEqual({ ok: false, error: "You need at least $5 in your balance to skip. Top up first." });
-  expect(await memberBalance(db, a)).toBe(300);
-});
-
-test("you cannot skip someone else's turn, or skip after the deadline", async () => {
-  const turn = await waitingTurn();
-  expect((await payToSkip(db, { turnId: turn.id, memberId: b, now: NOW })).ok).toBe(false);
-  expect((await payToSkip(db, { turnId: turn.id, memberId: a, now: LATE })).ok).toBe(false);
   expect(await balances()).toEqual([2000, 2000, 2000]);
 });
 
-test("a miss charges the skip price even when the balance is empty", async () => {
+test("a miss charges the chore's worth even when the balance is empty", async () => {
   await transfer(db, {
     houseId: house.houseId,
     from: { memberId: a },
@@ -292,9 +274,9 @@ test("an open bounty can still be claimed after the next turn has been handed ou
 
 test("every outcome is written to the activity feed", async () => {
   const first = await waitingTurn();
-  await payToSkip(db, { turnId: first.id, memberId: a, now: NOW });
-  await claimBounty(db, { turnId: first.id, memberId: b, photoId: await photo(b), now: NOW });
-  await ensureTurns(db, house.houseId, NOW);
+  await missTurn(db, { turnId: first.id, now: LATE });
+  await claimBounty(db, { turnId: first.id, memberId: b, photoId: await photo(b), now: LATE });
+  await ensureTurns(db, house.houseId, LATE);
   const second = await waitingTurn();
   // The second turn is next week's, so it is done next week: a turn opens two days before its deadline.
   await markDone(db, { turnId: second.id, memberId: b, photoId: await photo(b), now: NEXT_WEEK });
@@ -305,7 +287,7 @@ test("every outcome is written to the activity feed", async () => {
   const { rows } = await db.query(
     "select kind, data from activity where kind in ('skipped','claimed','done','missed')",
   );
-  expect(rows.map((r) => r.kind).sort()).toEqual(["claimed", "done", "missed", "skipped"]);
+  expect(rows.map((r) => r.kind).sort()).toEqual(["claimed", "done", "missed", "missed"]);
   for (const r of rows) expect(r.data).toMatchObject({ choreName: "Garbage" });
 });
 

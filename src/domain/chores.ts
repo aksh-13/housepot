@@ -83,7 +83,7 @@ function checkTime(time: string): string | null {
 function checkPrice(cents: number): string | null {
   return Number.isInteger(cents) && cents >= MIN_SKIP_PRICE_CENTS && cents <= MAX_SKIP_PRICE_CENTS
     ? null
-    : "The skip price must be between $1 and $50.";
+    : "A chore's worth must be between $1 and $50.";
 }
 
 function checkSchedule(s: Schedule): string | null {

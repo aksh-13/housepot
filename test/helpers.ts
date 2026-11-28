@@ -88,3 +88,16 @@ export async function makeHouse(
   }
   return { houseId, inviteCode, members };
 }
+
+/**
+ * Lets a waiting turn expire at `now`: moves its deadline just before `now`, then charges the miss.
+ * Used where a test needs a chore open to the house without waiting for the real deadline.
+ */
+export async function expireTurn(turnId: string, now: Date): Promise<{ ok: boolean }> {
+  const { missTurn } = await import("@/domain/turns");
+  await db.query("update turns set due_at = $2 where id = $1 and status = 'assigned'", [
+    turnId,
+    new Date(now.getTime() - 60_000),
+  ]);
+  return missTurn(db, { turnId, now });
+}

@@ -70,7 +70,7 @@ export default async function InboxPage({ searchParams }: Props) {
       <section className="section">
         <h2 className="label">Unpaid debts</h2>
         {debts.rows.length === 0 ? (
-          <p className="empty">None. Skip and claim a chore, then settle up.</p>
+          <p className="empty">None. Let a chore expire and claim it, then settle up.</p>
         ) : (
           debts.rows.map((d) => (
             <article key={d.id} className="turn">

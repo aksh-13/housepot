@@ -116,7 +116,7 @@ async function sendReminders(ctx: Ctx, house: House, members: Member[]): Promise
     const has = members.find((m) => m.id === turn.assignee_member_id)?.name;
     const options = turn.team_id
       ? `${has ? `${has} has it, and anyone` : "Anyone"} on the team can do it with a photo`
-      : "Done or skip";
+      : "Send a photo when it is done";
     const dueLocal = DateTime.fromJSDate(turn.due_at, { zone: house.tz });
     const by = dueLocal.toFormat("h:mm a");
     const finalDue =

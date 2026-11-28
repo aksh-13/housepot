@@ -7,7 +7,6 @@ import {
   nudgeAction,
   payAction,
   settleNowAction,
-  skipAction,
   voteAction,
 } from "@/app/actions";
 import { PhotoSubmit, ShareLink, SubmitButton } from "@/components/buttons";
@@ -344,21 +343,11 @@ export default async function HousePage({ searchParams }: Props) {
                       <PhotoSubmit label="Done" />
                     </form>
                   )}
-                  {turn.teamId ? (
-                    <p className="small muted">
-                      A team chore cannot be skipped. If nobody on {turn.teamName} does it, the{" "}
-                      {formatCents(turn.skipPriceCents)} is shared by the team.
-                    </p>
-                  ) : (
-                    <form action={skipAction}>
-                      <input type="hidden" name="turnId" value={turn.id} />
-                      <SubmitButton pendingLabel="Skipping…">
-                        {etransfer
-                          ? `Skip for ${formatCents(turn.skipPriceCents)}`
-                          : `Pay ${formatCents(turn.skipPriceCents)} to skip`}
-                      </SubmitButton>
-                    </form>
-                  )}
+                  <p className="small muted">
+                    {turn.teamId
+                      ? `Worth ${formatCents(turn.skipPriceCents)}. If nobody on ${turn.teamName} does it in time, the team shares that and it goes to whoever does it.`
+                      : `Worth ${formatCents(turn.skipPriceCents)}. Let it expire and that comes off your balance and goes to whoever does it.`}
+                  </p>
                 </div>
               </article>
             ))

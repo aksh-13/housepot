@@ -32,8 +32,7 @@ import {
   textNewDebts,
 } from "@/domain/settleup";
 import { addNudge, addTeam, removeNudge, removeTeam, saveTeams, sendNudge } from "@/domain/teams";
-import { assignTurn, claimBounty, markDone, payToSkip } from "@/domain/turns";
-import { textBountyOpen } from "@/domain/views";
+import { assignTurn, claimBounty, markDone } from "@/domain/turns";
 import {
   baseUrl,
   clearSessionCookie,
@@ -209,34 +208,6 @@ export async function doneAction(fd: FormData): Promise<void> {
     done.payoutCents
       ? `Done. You collected ${formatCents(done.payoutCents)} left on the chore.`
       : "Done. Nice one.",
-  );
-}
-
-export async function skipAction(fd: FormData): Promise<void> {
-  const { member, house } = await requireMember();
-  const db = getDb();
-  const turnId = str(fd, "turnId");
-  const now = new Date();
-  const skipped = await payToSkip(db, { turnId, memberId: member.id, now });
-  if (!skipped.ok) back("/house", "error", skipped.error);
-  const turn = await db.query<{ chore_id: string; name: string }>(
-    "select t.chore_id, c.name from turns t join chores c on c.id = t.chore_id where t.id = $1",
-    [turnId],
-  );
-  if (turn.rows[0]) {
-    await textBountyOpen(db, getProviders().sms, {
-      houseId: house.id,
-      choreId: turn.rows[0].chore_id,
-      choreName: turn.rows[0].name,
-      exceptMemberId: member.id,
-      link: `${await baseUrl()}/house`,
-    });
-  }
-  await ensureTurns(db, house.id, now);
-  back(
-    "/house",
-    "notice",
-    "Skipped. It is open to the house now, and you can still win it back by doing it.",
   );
 }
 

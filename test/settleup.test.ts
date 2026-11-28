@@ -24,11 +24,11 @@ import {
   textNewDebts,
 } from "@/domain/settleup";
 import { runTick } from "@/domain/tick";
-import { claimBounty, missTurn, payToSkip } from "@/domain/turns";
+import { claimBounty, missTurn } from "@/domain/turns";
 import { fakePayments } from "@/providers/payments";
 import { fakeSms } from "@/providers/sms";
 import { diskStorage } from "@/providers/storage";
-import { db, makeHouse, makeUser, resetDb, type TestHouse } from "./helpers";
+import { db, expireTurn, makeHouse, makeUser, resetDb, type TestHouse } from "./helpers";
 
 const NOW = new Date("2026-11-11T17:00:00Z"); // Wed noon Toronto; garbage is due Thu 21:00
 const LATE = new Date("2026-11-13T02:00:01Z"); // one second past the deadline
@@ -87,11 +87,11 @@ const debts = async () =>
   ).rows;
 const texts = async () => (await db.query("select to_phone, body from sms_outbox order by id")).rows;
 
-/** A skips the garbage (the first turn is always theirs) and B claims it. */
+/** A lets the garbage expire (the first turn is always theirs) and B claims it. */
 async function aSkipsBClaims(): Promise<void> {
   const turn = await waitingTurn();
   expect(turn.assignee_member_id).toBe(a);
-  expect(await payToSkip(db, { turnId: turn.id, memberId: a, now: NOW })).toEqual({ ok: true });
+  expect(await expireTurn(turn.id, NOW)).toEqual({ ok: true });
   expect(await claimBounty(db, { turnId: turn.id, memberId: b, photoId: await photo(b), now: NOW })).toEqual({
     ok: true,
     payoutCents: 500,
@@ -151,9 +151,9 @@ test("everyone in an e-Transfer house is active from the start, at $0, with no d
   expect((await getHouse(db, house.houseId))?.settlementDate).toBe("2026-12-01");
 });
 
-test("skipping at $0 is allowed and takes the balance below zero", async () => {
+test("a chore expiring at $0 takes the balance below zero", async () => {
   const turn = await waitingTurn();
-  expect(await payToSkip(db, { turnId: turn.id, memberId: a, now: NOW })).toEqual({ ok: true });
+  expect(await expireTurn(turn.id, NOW)).toEqual({ ok: true });
   expect(await memberBalance(db, a)).toBe(-500);
 });
 
@@ -508,7 +508,7 @@ describe("houseSquareUp", () => {
 
   test("reports money still waiting on a chore", async () => {
     const turn = await waitingTurn();
-    await payToSkip(db, { turnId: turn.id, memberId: a, now: NOW });
+    await expireTurn(turn.id, NOW);
     expect(await houseSquareUp(db, house.houseId)).toEqual({ lines: [], unclaimedCents: 500 });
     expect(await balances()).toEqual([-500, 0, 0]);
   });
