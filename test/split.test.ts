@@ -1,5 +1,13 @@
-import { expect, test } from "vitest";
-import { parseDollars, type SplitInput, splitBill } from "@/domain/split";
+import { describe, expect, test } from "vitest";
+import {
+  equalPercents,
+  formatPercent,
+  itemsToOwn,
+  parseDollars,
+  parsePercent,
+  type SplitInput,
+  splitBill,
+} from "@/domain/split";
 
 const split = (i: SplitInput) => {
   const r = splitBill(i);
@@ -174,3 +182,129 @@ test.each(["abc", "", "-3", "1.999", "1e3", "$", "1,2,3.4.5", "12.", "Infinity"]
     expect(parseDollars(input)).toBeNull();
   },
 );
+
+describe("item by item", () => {
+  const sharerIds = ["a", "b", "c"];
+
+  test("each line is split between whoever had it, and tax follows what each person had", () => {
+    // $50 of food came to $56.50. A had a $20 item; A and B shared $18; everyone shared $12.
+    const r = splitBill({
+      totalCents: 5650,
+      payerId: "a",
+      sharerIds,
+      items: {
+        subtotalCents: 5000,
+        lines: [
+          { priceCents: 2000, memberIds: ["a"] },
+          { priceCents: 1800, memberIds: ["a", "b"] },
+          { priceCents: 1200, memberIds: ["a", "b", "c"] },
+        ],
+      },
+    });
+    expect(r).toEqual({
+      ok: true,
+      shares: [
+        // Before tax: A 20 + 9 + 4 = $33, B 9 + 4 = $13, C $4. Each then pays 113% of that.
+        { memberId: "a", cents: 3729 },
+        { memberId: "b", cents: 1469 },
+        { memberId: "c", cents: 452 },
+      ],
+    });
+  });
+
+  test("an item's odd cent goes to whoever had it, earliest in rotation", () => {
+    expect(itemsToOwn([{ priceCents: 100, memberIds: ["c", "a", "b"] }], sharerIds)).toEqual({
+      ok: true,
+      ownCents: { a: 34, b: 33, c: 33 },
+    });
+  });
+
+  test("anything left of the subtotal is shared equally", () => {
+    const own = itemsToOwn([{ priceCents: 600, memberIds: ["b"] }], sharerIds);
+    expect(own).toEqual({ ok: true, ownCents: { b: 600 } });
+    const r = splitBill({
+      totalCents: 1500,
+      payerId: "a",
+      sharerIds,
+      items: { subtotalCents: 1500, lines: [{ priceCents: 600, memberIds: ["b"] }] },
+    });
+    expect(r).toEqual({
+      ok: true,
+      shares: [
+        { memberId: "a", cents: 300 },
+        { memberId: "b", cents: 900 },
+        { memberId: "c", cents: 300 },
+      ],
+    });
+  });
+
+  test.each([
+    [[], "Add at least one item."],
+    [[{ priceCents: 0, memberIds: ["a"] }], "Each item's price must be between $0.01 and $10,000."],
+    [[{ priceCents: 100, memberIds: [] }], "Tick who had each item."],
+    [[{ priceCents: 100, memberIds: ["z"] }], "An item is ticked for someone who is not sharing the bill."],
+  ])("refuses %j", (lines, error) => {
+    expect(itemsToOwn(lines, sharerIds)).toEqual({ ok: false, error });
+  });
+
+  test("items worth more than the subtotal are refused", () => {
+    const r = splitBill({
+      totalCents: 1000,
+      payerId: "a",
+      sharerIds,
+      items: { subtotalCents: 500, lines: [{ priceCents: 600, memberIds: ["a"] }] },
+    });
+    expect(r).toEqual({ ok: false, error: "The items add up to more than the subtotal." });
+  });
+});
+
+describe("by percentage", () => {
+  const sharerIds = ["a", "b", "c"];
+
+  test("each pays their percentage, and the parts add up to the total", () => {
+    const r = splitBill({
+      totalCents: 10_001,
+      payerId: "b",
+      sharerIds,
+      percentBp: { a: 5000, b: 3000, c: 2000 },
+    });
+    expect(r).toEqual({
+      ok: true,
+      shares: [
+        { memberId: "a", cents: 5000 },
+        { memberId: "b", cents: 3001 }, // the odd cent is the payer's
+        { memberId: "c", cents: 2000 },
+      ],
+    });
+  });
+
+  test("percentages that do not add up to 100 are refused", () => {
+    expect(
+      splitBill({ totalCents: 1000, payerId: "a", sharerIds, percentBp: { a: 5000, b: 3000, c: 1000 } }),
+    ).toEqual({
+      ok: false,
+      error: "The percentages add up to 90%, not 100%.",
+    });
+    expect(splitBill({ totalCents: 1000, payerId: "a", sharerIds, percentBp: { a: 5000, b: 5000 } })).toEqual(
+      {
+        ok: false,
+        error: "Give everyone ticked a percentage above 0, or untick them.",
+      },
+    );
+  });
+
+  test("typing percentages, and an equal starting point", () => {
+    expect(["25", "33.33", "12.5%", "100", "101", "abc", "1.234"].map(parsePercent)).toEqual([
+      2500,
+      3333,
+      1250,
+      10_000,
+      null,
+      null,
+      null,
+    ]);
+    expect(equalPercents(["a", "b", "c"])).toEqual({ a: 3334, b: 3333, c: 3333 });
+    expect(formatPercent(3333)).toBe("33.33%");
+    expect(formatPercent(5000)).toBe("50%");
+  });
+});

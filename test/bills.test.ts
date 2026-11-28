@@ -91,6 +91,8 @@ test("a bill reads back with who paid, who added it and each person's share", as
     description: "Costco run",
     totalCents: 6780,
     subtotalCents: 6000,
+    splitKind: "receipt",
+    items: [],
     paidByMemberId: ana,
     paidByName: "Ana",
     createdByName: "Ben",
@@ -98,9 +100,9 @@ test("a bill reads back with who paid, who added it and each person's share", as
     edited: false,
     locked: false,
     shares: [
-      { memberId: ana, name: "Ana", ownCents: 3000, shareCents: 4144 },
-      { memberId: ben, name: "Ben", ownCents: 1000, shareCents: 1883 },
-      { memberId: cy, name: "Cy", ownCents: null, shareCents: 753 },
+      { memberId: ana, name: "Ana", ownCents: 3000, shareCents: 4144, percentBp: null },
+      { memberId: ben, name: "Ben", ownCents: 1000, shareCents: 1883, percentBp: null },
+      { memberId: cy, name: "Cy", ownCents: null, shareCents: 753, percentBp: null },
     ],
   });
 });
@@ -445,5 +447,80 @@ test("an edit records the old total, so the feed can show what changed", async (
   expect((await recentActivity(db, house.houseId, 1))[0]).toMatchObject({
     kind: "bill_edited",
     data: { billId, description: "Groceries", totalCents: 9550, previousTotalCents: 9000 },
+  });
+});
+
+test("an item-by-item bill stores its lines and who had each, and charges by what they had", async () => {
+  const id = await add(
+    groceries({
+      totalCents: 5650,
+      items: {
+        subtotalCents: 5000,
+        lines: [
+          { name: "Pizza", priceCents: 2000, memberIds: [ana] },
+          { name: "Wings", priceCents: 1800, memberIds: [ana, ben] },
+          { name: "Pop", priceCents: 1200, memberIds: [ana, ben, cy] },
+        ],
+      },
+    }),
+  );
+  expect(await balances()).toEqual([5650 - 3729, -1469, -452]);
+  const bill = await billById(db, id);
+  expect(bill?.splitKind).toBe("items");
+  expect(bill?.items.map((i) => [i.name, i.priceCents, i.memberIds.length])).toEqual([
+    ["Pizza", 2000, 1],
+    ["Wings", 1800, 2],
+    ["Pop", 1200, 3],
+  ]);
+});
+
+test("a percentage bill, and editing it to equal drops the percentages", async () => {
+  const id = await add(groceries({ percentBp: { [ana]: 5000, [ben]: 3000, [cy]: 2000 } }));
+  expect(await balances()).toEqual([4500, -2700, -1800]);
+  expect((await billById(db, id))?.shares.map((s) => s.percentBp)).toEqual([5000, 3000, 2000]);
+  const edited = await editBill(db, { billId: id, actorMemberId: ana, input: groceries(), now: LATER });
+  expect(edited).toEqual({ ok: true });
+  expect(await balances()).toEqual([6000, -3000, -3000]);
+  const bill = await billById(db, id);
+  expect(bill?.splitKind).toBe("equal");
+  expect(bill?.shares.map((s) => s.percentBp)).toEqual([null, null, null]);
+});
+
+test("item and percentage forms become bill inputs", () => {
+  const items = form({ description: "Dinner", total: "56.50", paidBy: "a", split: "items", subtotal: "50" });
+  items.append("sharer", "a");
+  items.append("sharer", "b");
+  items.append("line", "0");
+  items.set("line:0:name", "Pizza");
+  items.set("line:0:price", "20");
+  items.append("line:0:who", "a");
+  items.append("line:0:who", "z"); // not on the bill, so dropped
+  expect(billInputFromForm(items)).toEqual({
+    ok: true,
+    input: {
+      description: "Dinner",
+      totalCents: 5650,
+      paidByMemberId: "a",
+      sharerMemberIds: ["a", "b"],
+      items: { subtotalCents: 5000, lines: [{ name: "Pizza", priceCents: 2000, memberIds: ["a"] }] },
+    },
+  });
+
+  const pct = form({
+    description: "Rent",
+    total: "1000",
+    paidBy: "a",
+    split: "percent",
+    "pct:a": "60",
+    "pct:b": "40",
+  });
+  pct.append("sharer", "a");
+  pct.append("sharer", "b");
+  const r = billInputFromForm(pct);
+  expect(r.ok && r.input.percentBp).toEqual({ a: 6000, b: 4000 });
+  pct.set("pct:b", "forty");
+  expect(billInputFromForm(pct)).toEqual({
+    ok: false,
+    error: "One of the percentages is not a number from 0 to 100.",
   });
 });

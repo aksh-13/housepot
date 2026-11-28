@@ -941,3 +941,32 @@ form > .receipt {
 .swap-asked {
   margin-top: var(--space-3);
 }
+
+/* The bill form: scanning a receipt, and item-by-item lines. */
+.scan {
+  margin-bottom: var(--space-4);
+}
+.item-line {
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--rule);
+}
+.item-line .who {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--rule-strong);
+  border-radius: 999px;
+  font-size: var(--text-sm);
+}
+.chip:has(input:checked) {
+  background: var(--wash-gain);
+  border-color: var(--accent);
+}
