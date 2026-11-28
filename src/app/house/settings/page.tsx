@@ -1,3 +1,4 @@
+import Link from "next/link";
 import {
   autoReloadAction,
   closeVoteAction,
@@ -226,6 +227,15 @@ export default async function SettingsPage({ searchParams }: Props) {
 
       <section className="section stack">
         <h2 className="label">You</h2>
+        <div className="setting">
+          <div>
+            <h3>How Housepot works</h3>
+            <p>The rules in five lines, the house's chores and their worth.</p>
+          </div>
+          <Link className="btn" href="/welcome">
+            Open
+          </Link>
+        </div>
         {!etransfer && (
           <div className="setting">
             <div>
@@ -298,7 +308,7 @@ export default async function SettingsPage({ searchParams }: Props) {
                 : balance >= 0
                   ? `Your ${formatCents(balance)} goes back to your card. Anything you won on top is sent by e-Transfer within a few days.`
                   : `You owe the house ${formatCents(-balance)}. Leaving writes that off, and your housemates will see it.`}{" "}
-              A turn that is waiting on you counts as skipped. This cannot be undone.
+              A turn that is waiting on you counts as expired. This cannot be undone.
             </p>
             <form action={leaveAction}>
               <SubmitButton className="btn btn-danger btn-block" pendingLabel="Leaving…">

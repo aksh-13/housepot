@@ -32,6 +32,8 @@ export type Member = {
   bank: string | null;
   /** The cleaning team this housemate is on, if the house uses teams. */
   teamId: string | null;
+  /** When they finished the first-run walkthrough. Null: show it to them. */
+  onboardedAt: Date | null;
   name: string;
   /** Where messages for this person go: their email if they have one, otherwise their phone. */
   contact: string;
@@ -54,7 +56,7 @@ export type House = {
 
 const MEMBER_COLUMNS = `m.id, m.house_id as "houseId", m.user_id as "userId", m.status,
   m.rotation_position as "rotationPosition", m.auto_reload as "autoReload", m.customer_ref as "customerRef",
-  m.etransfer_email as "etransferEmail", m.bank, m.team_id as "teamId", coalesce(u.name, 'Housemate') as name, coalesce(u.email, u.phone) as contact`;
+  m.etransfer_email as "etransferEmail", m.bank, m.team_id as "teamId", m.onboarded_at as "onboardedAt", coalesce(u.name, 'Housemate') as name, coalesce(u.email, u.phone) as contact`;
 
 export const HOUSE_COLUMNS = `id, name, invite_code as "inviteCode", deposit_cents as "depositCents", tz, paused,
   settlement_date as "settlementDate", money_mode as "moneyMode", team_weeks as "teamWeeks",
@@ -287,4 +289,21 @@ export async function setPayoutDetails(db: Db, a: PayoutArgs): Promise<{ ok: tru
     bank,
   ]);
   return { ok: true };
+}
+
+/** The member finished the first-run walkthrough. */
+export async function finishOnboarding(db: Db, memberId: string, now: Date): Promise<void> {
+  await db.query("update members set onboarded_at = coalesce(onboarded_at, $2) where id = $1", [
+    memberId,
+    now,
+  ]);
+}
+
+/** True when this member started the house, so the walkthrough asks them to set it up. */
+export async function startedHouse(db: Db, houseId: string, memberId: string): Promise<boolean> {
+  const { rows } = await db.query(
+    "select 1 from activity where house_id = $1 and kind = 'house_created' and member_id = $2",
+    [houseId, memberId],
+  );
+  return rows.length > 0;
 }

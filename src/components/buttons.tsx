@@ -47,9 +47,12 @@ function CameraIcon() {
   );
 }
 
+/** Most photos one proof can have. Matches MAX_PHOTOS on the server. */
+const MAX_PHOTOS = 4;
+
 /**
- * A button that opens the camera. Choosing a photo sends the surrounding form straight away,
- * so "done" is one tap and one photo.
+ * A button that opens the camera or the photo library. Choosing one to four photos sends the
+ * surrounding form straight away, so "done" is one tap. Extra photos past four are dropped.
  */
 export function PhotoSubmit({ label, className = "btn btn-primary" }: { label: string; className?: string }) {
   const { pending } = useFormStatus();
@@ -63,22 +66,19 @@ export function PhotoSubmit({ label, className = "btn btn-primary" }: { label: s
         type="file"
         name="photo"
         accept="image/*"
-        capture="environment"
+        multiple
         className="visually-hidden"
         onChange={async (e) => {
           const input = e.currentTarget;
-          const file = input.files?.[0];
-          if (!file) return;
+          const files = [...(input.files ?? [])].slice(0, MAX_PHOTOS);
+          if (files.length === 0) return;
           setPreparing(true);
           try {
-            const small = await shrink(file);
-            if (small !== file) {
-              const swap = new DataTransfer();
-              swap.items.add(small);
-              input.files = swap.files;
-            }
+            const swap = new DataTransfer();
+            for (const file of files) swap.items.add(await shrink(file));
+            input.files = swap.files;
           } catch {
-            // Keep the original file.
+            // Keep the original files.
           }
           input.form?.requestSubmit();
           setPreparing(false);

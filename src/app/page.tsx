@@ -30,8 +30,8 @@ export default async function FrontPage({ searchParams }: Props) {
       <section className="hero section">
         <h1>Chores and bills for your house, on one tab.</h1>
         <p className="lede">
-          Split the groceries, rotate the chores, and see exactly who owes whom. Skip your turn and $5 goes to
-          whoever does the job.
+          Split the groceries, rotate the chores, and see exactly who owes whom. Let your chore expire and its
+          worth goes to whoever does the job.
         </p>
         <div className="actions actions-one">
           <Link href="/new" className="btn btn-primary">
@@ -97,8 +97,8 @@ export default async function FrontPage({ searchParams }: Props) {
             <div>
               <strong>Chores take turns.</strong>
               <span>
-                Do yours and send a photo, or skip it for a price. A skipped or missed chore is open to the
-                house, and the first one to do it takes the money.
+                Do yours and send a photo, and the house votes that it is done. Let it expire and it is open
+                to the house: the first one to do it takes its worth.
               </span>
             </div>
           </li>

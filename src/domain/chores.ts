@@ -4,6 +4,7 @@ import { nextDueAt, type Schedule } from "@/time";
 import { logActivity } from "./activity";
 import { activeMembers, getHouse, memberById } from "./houses";
 import { teamOnDuty } from "./teams";
+import { needsAgreement, propose } from "./worth";
 
 export const DEFAULT_SKIP_PRICE_CENTS = 500;
 const MIN_SKIP_PRICE_CENTS = 100;
@@ -18,6 +19,8 @@ export type Chore = {
   archived: boolean;
   /** True: each turn belongs to the cleaning team on duty, not to one person. */
   teamDuty: boolean;
+  /** False while the house has not yet agreed on the chore and its worth. It gets no turns until then. */
+  agreed: boolean;
 };
 
 type ChoreRow = {
@@ -31,6 +34,7 @@ type ChoreRow = {
   skip_price_cents: number;
   archived: boolean;
   team_duty: boolean;
+  agreed_at: Date | null;
 };
 
 type Fail = { ok: false; error: string };
@@ -48,11 +52,12 @@ function toChore(r: ChoreRow): Chore {
     skipPriceCents: r.skip_price_cents,
     archived: r.archived,
     teamDuty: r.team_duty,
+    agreed: r.agreed_at !== null,
   };
 }
 
 const CHORE_COLUMNS =
-  "id, name, schedule_kind, weekday, every_n, anchor_date, deadline_time, skip_price_cents, archived, team_duty";
+  "id, name, schedule_kind, weekday, every_n, anchor_date, deadline_time, skip_price_cents, archived, team_duty, agreed_at";
 
 /** The house's chores that are still in use, oldest first. */
 export async function listChores(db: Db, houseId: string): Promise<Chore[]> {
@@ -83,7 +88,7 @@ function checkTime(time: string): string | null {
 function checkPrice(cents: number): string | null {
   return Number.isInteger(cents) && cents >= MIN_SKIP_PRICE_CENTS && cents <= MAX_SKIP_PRICE_CENTS
     ? null
-    : "The skip price must be between $1 and $50.";
+    : "A chore's worth must be between $1 and $50.";
 }
 
 function checkSchedule(s: Schedule): string | null {
@@ -113,7 +118,15 @@ type CreateArgs = {
   now: Date;
 };
 
-export async function createChore(db: Db, a: CreateArgs): Promise<{ ok: true; choreId: string } | Fail> {
+/**
+ * Adds a chore. While the house has nobody else in it, the person setting it up decides, and the
+ * chore starts straight away. After that, it starts once the house agrees to it and its worth
+ * (proposed: true).
+ */
+export async function createChore(
+  db: Db,
+  a: CreateArgs,
+): Promise<{ ok: true; choreId: string; proposed: boolean } | Fail> {
   const skipPriceCents = a.skipPriceCents ?? DEFAULT_SKIP_PRICE_CENTS;
   const error =
     checkName(a.name) ?? checkTime(a.deadlineTime) ?? checkPrice(skipPriceCents) ?? checkSchedule(a.schedule);
@@ -128,11 +141,12 @@ export async function createChore(db: Db, a: CreateArgs): Promise<{ ok: true; ch
     return { ok: false, error: "Pick a housemate to go first." };
   }
   const name = a.name.trim().slice(0, 60);
+  const proposed = await needsAgreement(db, a.houseId, a.memberId);
   return db.tx(async (t) => {
     const { rows } = await t.query<{ id: string }>(
       `insert into chores (house_id, name, schedule_kind, weekday, every_n, anchor_date, deadline_time,
-         skip_price_cents, first_member_id, team_duty, created_at)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) returning id`,
+         skip_price_cents, first_member_id, team_duty, created_at, agreed_at)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) returning id`,
       [
         a.houseId,
         name,
@@ -142,16 +156,33 @@ export async function createChore(db: Db, a: CreateArgs): Promise<{ ok: true; ch
         first.id,
         a.teamDuty ?? false,
         a.now,
+        proposed ? null : a.now,
       ],
     );
-    await logActivity(t, {
-      houseId: a.houseId,
-      memberId: a.memberId,
-      kind: "chore_added",
-      data: first.id === a.memberId ? { name } : { name, firstName: first.name },
-      now: a.now,
-    });
-    return { ok: true as const, choreId: rows[0].id };
+    const choreId = rows[0].id;
+    // A proposed chore shows in the feed as the proposal; "added" is for one that starts now.
+    if (!proposed) {
+      await logActivity(t, {
+        houseId: a.houseId,
+        memberId: a.memberId,
+        kind: "chore_added",
+        data: first.id === a.memberId ? { name } : { name, firstName: first.name },
+        now: a.now,
+      });
+    }
+    if (proposed) {
+      await propose(t, {
+        houseId: a.houseId,
+        choreId,
+        choreName: name,
+        memberId: a.memberId,
+        kind: "new",
+        ...(first.id === a.memberId ? {} : { firstName: first.name }),
+        worthCents: skipPriceCents,
+        now: a.now,
+      });
+    }
+    return { ok: true as const, choreId, proposed };
   });
 }
 
@@ -167,8 +198,12 @@ type UpdateArgs = {
   now: Date;
 };
 
-/** Edits a chore. Changing when it is due, or archiving it, cancels the turn that is waiting. */
-export async function updateChore(db: Db, a: UpdateArgs): Promise<{ ok: true } | Fail> {
+/**
+ * Edits a chore. Changing when it is due, or archiving it, cancels the turn that is waiting.
+ * A new worth needs the house to agree once anyone else is in it, so it becomes a proposal
+ * (proposed: true) and the chore keeps its old worth until then.
+ */
+export async function updateChore(db: Db, a: UpdateArgs): Promise<{ ok: true; proposed: boolean } | Fail> {
   const chore = await getChore(db, a.choreId);
   const member = await memberById(db, a.memberId);
   if (!chore || !member || member.houseId !== chore.houseId || member.status !== "active") {
@@ -186,6 +221,19 @@ export async function updateChore(db: Db, a: UpdateArgs): Promise<{ ok: true } |
   const deadlineTime = a.deadlineTime ?? chore.deadlineTime;
   const archived = a.archived ?? chore.archived;
   const teamDuty = a.teamDuty ?? chore.teamDuty;
+  const newWorth = a.skipPriceCents !== undefined && a.skipPriceCents !== chore.skipPriceCents;
+  // A chore still waiting to be agreed changes through its own proposal, so its worth is not edited here.
+  if (newWorth && !chore.agreed) {
+    return { ok: false, error: "The house is still deciding on this chore. Wait for that first." };
+  }
+  const proposeWorth = newWorth && (await needsAgreement(db, chore.houseId, a.memberId));
+  if (proposeWorth) {
+    const open = await db.query("select 1 from chore_proposals where chore_id = $1 and status = 'open'", [
+      a.choreId,
+    ]);
+    if (open.rows.length > 0)
+      return { ok: false, error: "A new worth for this chore is already being voted on." };
+  }
   // Who a turn belongs to is fixed when it is created, so changing that restarts the waiting turn too.
   const timingChanged =
     JSON.stringify(schedule) !== JSON.stringify(chore.schedule) ||
@@ -201,7 +249,7 @@ export async function updateChore(db: Db, a: UpdateArgs): Promise<{ ok: true } |
         name,
         ...scheduleColumns(schedule),
         deadlineTime,
-        a.skipPriceCents ?? chore.skipPriceCents,
+        proposeWorth ? chore.skipPriceCents : (a.skipPriceCents ?? chore.skipPriceCents),
         archived,
         teamDuty,
       ],
@@ -218,8 +266,19 @@ export async function updateChore(db: Db, a: UpdateArgs): Promise<{ ok: true } |
       data: { name },
       now: a.now,
     });
+    if (proposeWorth && !archived) {
+      await propose(t, {
+        houseId: chore.houseId,
+        choreId: a.choreId,
+        choreName: name,
+        memberId: a.memberId,
+        kind: "worth",
+        worthCents: a.skipPriceCents!,
+        now: a.now,
+      });
+    }
   });
-  return { ok: true };
+  return { ok: true, proposed: proposeWorth && !archived };
 }
 
 /**
@@ -273,6 +332,8 @@ export async function ensureTurns(db: Db, houseId: string, now: Date): Promise<n
   );
   const firstOf = new Map(firsts.rows.map((r) => [r.id, r.first_member_id]));
   for (const chore of await listChores(db, houseId)) {
+    // A chore the house has not agreed to yet gets no turns.
+    if (!chore.agreed) continue;
     const waiting = await db.query("select 1 from turns where chore_id = $1 and status = 'assigned'", [
       chore.id,
     ]);
@@ -280,7 +341,7 @@ export async function ensureTurns(db: Db, houseId: string, now: Date): Promise<n
 
     const last = await db.query<{ due_at: Date; position: number }>(
       `select t.due_at, m.rotation_position as position
-       from turns t join members m on m.id = t.assignee_member_id
+       from turns t join members m on m.id = coalesce(t.rotation_member_id, t.assignee_member_id)
        where t.chore_id = $1 and t.status <> 'cancelled' order by t.due_at desc limit 1`,
       [chore.id],
     );

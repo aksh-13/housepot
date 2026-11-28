@@ -1,7 +1,6 @@
 import type { Db } from "@/db";
 import { formatCents } from "@/money";
 import type { Sms } from "@/providers/sms";
-import { DISPUTE_WINDOW_MS } from "./disputes";
 import { activeMembers } from "./houses";
 import { choreBounty } from "./ledger";
 
@@ -40,23 +39,6 @@ export async function houseTurns(db: Db, houseId: string): Promise<TurnView[]> {
     [houseId],
   );
   return rows;
-}
-
-/** Finished turns this member may still dispute: someone else's, inside 24 hours, not yet disputed. */
-export async function disputableTurnIds(
-  db: Db,
-  houseId: string,
-  memberId: string,
-  now: Date,
-): Promise<Set<string>> {
-  const { rows } = await db.query<{ id: string }>(
-    `select t.id from turns t
-       left join disputes d on d.turn_id = t.id and d.completion_at = t.completed_at
-     where t.house_id = $1 and t.status in ('done', 'claimed') and d.id is null
-       and t.completed_by_member_id <> $2 and t.completed_at >= $3`,
-    [houseId, memberId, new Date(now.getTime() - DISPUTE_WINDOW_MS)],
-  );
-  return new Set(rows.map((r) => r.id));
 }
 
 /** Tells the other housemates that a chore is up for grabs. */

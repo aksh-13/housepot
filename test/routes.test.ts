@@ -12,17 +12,17 @@ import { GET as photoRoute } from "@/app/api/photos/[id]/route";
 import { GET as readyz } from "@/app/api/readyz/route";
 import { POST as webhook } from "@/app/api/webhooks/payments/route";
 import { requestCode, verifyCode } from "@/domain/auth";
-import { createChore, ensureTurns } from "@/domain/chores";
+import { ensureTurns } from "@/domain/chores";
 import { activeMembers, createHouse } from "@/domain/houses";
 import { memberBalance } from "@/domain/ledger";
 import { savePhoto } from "@/domain/photos";
-import { claimBounty, markDone, missTurn } from "@/domain/turns";
-import { disputableTurnIds, houseTurns } from "@/domain/views";
+import { missTurn } from "@/domain/turns";
+import { houseTurns } from "@/domain/views";
 import { ago, dueLabel } from "@/lib/format";
 import { SESSION_COOKIE } from "@/lib/session";
 import { getProviders } from "@/providers";
 import { fakeSms } from "@/providers/sms";
-import { db, makeHouse, makeUser, resetDb } from "./helpers";
+import { addChore, db, makeHouse, makeUser, resetDb } from "./helpers";
 
 const NOW = new Date("2026-11-11T17:00:00Z");
 const LATE = new Date("2026-11-13T02:00:01Z");
@@ -63,7 +63,7 @@ test("the tick endpoint refuses callers without the secret", async () => {
 
 test("the tick endpoint runs a tick for callers with the secret", async () => {
   const house = await makeHouse(2);
-  await createChore(db, {
+  await addChore(db, {
     houseId: house.houseId,
     memberId: house.members[0].memberId,
     name: "Garbage",
@@ -188,7 +188,7 @@ test("a proof photo is served to housemates and to nobody else", async () => {
 test("houseTurns lists waiting and open turns with who, when and how much is on them", async () => {
   const house = await makeHouse(2);
   const [a, b] = house.members.map((m) => m.memberId);
-  const chore = await createChore(db, {
+  const chore = await addChore(db, {
     houseId: house.houseId,
     memberId: a,
     name: "Garbage",
@@ -232,45 +232,6 @@ test("houseTurns lists waiting and open turns with who, when and how much is on 
       bountyCents: 500,
     },
   ]);
-});
-
-test("a finished chore can be disputed by the others for 24 hours, once", async () => {
-  const house = await makeHouse(3);
-  const [a, b] = house.members.map((m) => m.memberId);
-  const chore = await createChore(db, {
-    houseId: house.houseId,
-    memberId: a,
-    name: "Garbage",
-    schedule: { kind: "weekly", weekday: 4 },
-    deadlineTime: "21:00",
-    now: NOW,
-  });
-  if (!chore.ok) throw new Error(chore.error);
-  await ensureTurns(db, house.houseId, NOW);
-  const turnId = (await db.query("select id from turns")).rows[0].id;
-  const p = await savePhoto(db, getProviders().storage, {
-    houseId: house.houseId,
-    memberId: a,
-    bytes: Buffer.from([1]),
-    contentType: "image/jpeg",
-    now: NOW,
-  });
-  if (!p.ok) throw new Error(p.error);
-  await markDone(db, { turnId, memberId: a, photoId: p.photoId, now: NOW });
-
-  const in1h = new Date(NOW.getTime() + 3600_000);
-  expect([...(await disputableTurnIds(db, house.houseId, b, in1h))]).toEqual([turnId]);
-  expect([...(await disputableTurnIds(db, house.houseId, a, in1h))]).toEqual([]); // your own
-  const in25h = new Date(NOW.getTime() + 25 * 3600_000);
-  expect([...(await disputableTurnIds(db, house.houseId, b, in25h))]).toEqual([]);
-
-  await db.query(
-    "insert into disputes (turn_id, house_id, raised_by_member_id, accused_member_id, completion_at) values ($1, $2, $3, $4, $5)",
-    [turnId, house.houseId, b, a, NOW],
-  );
-  expect([...(await disputableTurnIds(db, house.houseId, b, in1h))]).toEqual([]);
-  // claimBounty is imported so the claimed path stays type-checked alongside done.
-  expect(typeof claimBounty).toBe("function");
 });
 
 test.each([

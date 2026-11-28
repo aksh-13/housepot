@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "Housepot",
-  description: "Chores with money on the line. Skip your turn and it pays whoever does it.",
+  description: "Chores with money on the line. Let your chore expire and it pays whoever does it.",
   // Opened from an iPhone's home screen, it runs full screen under this name.
   appleWebApp: { capable: true, title: "Housepot", statusBarStyle: "black" },
 };

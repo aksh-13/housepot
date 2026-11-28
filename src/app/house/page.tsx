@@ -1,14 +1,17 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import {
+  approvalVoteAction,
   assignTurnAction,
   claimAction,
-  disputeAction,
   doneAction,
   nudgeAction,
   payAction,
   settleNowAction,
-  skipAction,
-  voteAction,
+  swapAnswerAction,
+  swapCancelAction,
+  swapRequestAction,
+  worthVoteAction,
 } from "@/app/actions";
 import { PhotoSubmit, ShareLink, SubmitButton } from "@/components/buttons";
 import { Flash, Masthead } from "@/components/frame";
@@ -17,13 +20,15 @@ import { LiveRefresh } from "@/components/live-refresh";
 import { SquareUpList } from "@/components/square-up";
 import { getDb } from "@/db";
 import { type ActivityItem, recentActivity } from "@/domain/activity";
+import { pendingSubmissions, type SubmissionView } from "@/domain/approvals";
 import { listChores } from "@/domain/chores";
-import { openDisputes } from "@/domain/disputes";
 import { houseBalances } from "@/domain/ledger";
 import { debtsForUser, houseSquareUp } from "@/domain/settleup";
-import { listNudges, teamOnDuty } from "@/domain/teams";
+import { openSwaps, type SwapView } from "@/domain/swaps";
+import { listNudges, listTeams, teamOnDuty } from "@/domain/teams";
 import { DONE_OPENS_MS } from "@/domain/turns";
-import { disputableTurnIds, houseTurns, type TurnView } from "@/domain/views";
+import { houseTurns, type TurnView } from "@/domain/views";
+import { openProposals } from "@/domain/worth";
 import { baseUrl, requireMember } from "@/lib/current";
 import { ago, dateLabel, dueLabel, signedCents } from "@/lib/format";
 import { feeCents, formatCents } from "@/money";
@@ -83,6 +88,35 @@ function describe(item: ActivityItem, meId: string): { text: string; cents?: num
       return { text: `${who} gave ${chore} to ${item.data.toName}` };
     case "dispute_raised":
       return { text: `${who} disputed ${chore}` };
+    case "worth_proposed":
+      return {
+        text:
+          item.data.proposal === "new"
+            ? `${who} proposed ${item.data.name}, worth ${formatCents(Number(item.data.worthCents))}${item.data.firstName ? `, starting with ${item.data.firstName}` : ""}`
+            : `${who} proposed ${item.data.name} be worth ${formatCents(Number(item.data.worthCents))}`,
+      };
+    case "worth_agreed":
+      return {
+        text: `The house agreed: ${item.data.name} is worth ${formatCents(Number(item.data.worthCents))}`,
+      };
+    case "worth_not_agreed":
+      return {
+        text: `${item.data.name} at ${formatCents(Number(item.data.worthCents))} ${item.data.outcome === "lapsed" ? "lapsed without enough votes" : "was turned down"}`,
+      };
+    case "swap_requested":
+      return { text: `${who} asked ${item.data.toName} to take ${chore}` };
+    case "swap_accepted":
+      return {
+        text: item.data.backChoreName
+          ? `${who} swapped with ${item.data.fromName}: ${chore} for ${item.data.backChoreName}`
+          : `${who} took ${chore} for ${item.data.fromName}`,
+      };
+    case "joined_team":
+      return { text: `${who} joined ${item.data.name}` };
+    case "proof_sent":
+      return { text: `${who} sent photos for ${chore}` };
+    case "proof_rejected":
+      return { text: `The house said ${who === "You" ? "your" : `${who}'s`} ${chore} was not done` };
     case "dispute_passed":
       return { text: `The house agreed ${chore} was not done`, cents: amount ? -amount : undefined };
     case "paused":
@@ -145,22 +179,155 @@ function openReason(turn: TurnView, meId: string): string {
   return mine ? "You missed this." : `${turn.assigneeName} missed it.`;
 }
 
+/** "Ask someone to take it" on one of your own turns, or the request you have already sent. */
+function SwapControls({
+  turn,
+  asked,
+  housemates,
+  theirTurns,
+  now,
+  tz,
+}: {
+  turn: TurnView;
+  asked: SwapView | undefined;
+  housemates: { memberId: string; name: string }[];
+  theirTurns: TurnView[];
+  now: Date;
+  tz: string;
+}) {
+  if (asked) {
+    return (
+      <div className="swap-asked">
+        <p className="small muted">
+          You asked {asked.toName} to take it
+          {asked.giveBack ? ` in exchange for you doing their ${asked.giveBack.choreName}` : ""}. It stays
+          yours until they accept.
+        </p>
+        <form action={swapCancelAction}>
+          <input type="hidden" name="requestId" value={asked.id} />
+          <SubmitButton className="btn-quiet">Cancel the request</SubmitButton>
+        </form>
+      </div>
+    );
+  }
+  return (
+    <details className="editor swap">
+      <summary>
+        <span>Ask someone to take it</span>
+      </summary>
+      <div className="body">
+        <form action={swapRequestAction}>
+          <input type="hidden" name="turnId" value={turn.id} />
+          <div className="field">
+            <label htmlFor={`swap-to-${turn.id}`}>Who</label>
+            <select id={`swap-to-${turn.id}`} name="toMemberId" className="input" required>
+              {housemates.map((m) => (
+                <option key={m.memberId} value={m.memberId}>
+                  {m.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          {theirTurns.length > 0 && (
+            <div className="field">
+              <label htmlFor={`swap-back-${turn.id}`}>In exchange, you do</label>
+              <select id={`swap-back-${turn.id}`} name="giveBackTurnId" className="input" defaultValue="">
+                <option value="">Nothing: ask it as a favour</option>
+                {theirTurns.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.assigneeName}'s {t.choreName}, {dueLabel(t.dueAt, now, tz)}
+                  </option>
+                ))}
+              </select>
+              <span className="hint">
+                Pick one of the chosen person's turns. It swaps only if they accept.
+              </span>
+            </div>
+          )}
+          <SubmitButton className="btn btn-block" pendingLabel="Asking…">
+            Ask
+          </SubmitButton>
+        </form>
+      </div>
+    </details>
+  );
+}
+
+/** True when this open chore expired on the viewer (or their team), so they cannot claim it. */
+function expiredOnMe(turn: TurnView, member: { id: string; teamId: string | null }): boolean {
+  return turn.teamId ? turn.teamId === member.teamId : turn.assigneeMemberId === member.id;
+}
+
+function ProofPhotos({ proof }: { proof: SubmissionView }) {
+  return (
+    <div className="proof-photos">
+      {proof.photoIds.map((id, i) => (
+        <a key={id} href={`/api/photos/${id}`} target="_blank" rel="noreferrer">
+          {/* biome-ignore lint/performance/noImgElement: proof photos are private and served by our own route */}
+          <img
+            className="thumb"
+            src={`/api/photos/${id}`}
+            alt={`Proof ${i + 1} of ${proof.photoIds.length} for ${proof.choreName}`}
+          />
+        </a>
+      ))}
+    </div>
+  );
+}
+
+/** Shown on a chore whose proof is with the house: who sent it and how the vote stands. */
+function ProofStatus({
+  proof,
+  meId,
+  now,
+  tz,
+}: {
+  proof: SubmissionView;
+  meId: string;
+  now: Date;
+  tz: string;
+}) {
+  const mine = proof.memberId === meId;
+  return (
+    <div className="proof-status">
+      <p className="small">
+        <strong>{mine ? "You sent photos." : `${proof.memberName} sent photos.`}</strong> {proof.yes} of{" "}
+        {proof.needed} {proof.needed === 1 ? "says" : "say"} it looks done
+        {proof.no > 0 ? `, ${proof.no} not done` : ""}. It counts by{" "}
+        {midSentence(dueLabel(proof.closesAt, now, tz))} unless most say it is not.
+      </p>
+      <ProofPhotos proof={proof} />
+    </div>
+  );
+}
+
 export default async function HousePage({ searchParams }: Props) {
   const { user, member, house } = await requireMember();
+  // Someone new goes through the walkthrough first.
+  if (!member.onboardedAt) redirect("/welcome");
   const db = getDb();
   const now = new Date();
   const etransfer = house.moneyMode === "etransfer";
-  const [balances, turns, disputes, activity, disputable, chores, myDebts, squareUp] = await Promise.all([
+  const [balances, turns, pending, activity, chores, myDebts, squareUp] = await Promise.all([
     houseBalances(db, house.id),
     houseTurns(db, house.id),
-    openDisputes(db, house.id, now),
+    pendingSubmissions(db, house.id),
     recentActivity(db, house.id, 30),
-    disputableTurnIds(db, house.id, member.id, now),
     listChores(db, house.id),
     etransfer ? debtsForUser(db, user.id) : Promise.resolve([]),
     etransfer ? houseSquareUp(db, house.id) : Promise.resolve({ lines: [], unclaimedCents: 0 }),
   ]);
-  const [duty, nudges] = await Promise.all([teamOnDuty(db, house.id, now), listNudges(db, house.id)]);
+  const [duty, nudges, proposals, swaps, teams] = await Promise.all([
+    teamOnDuty(db, house.id, now),
+    listNudges(db, house.id),
+    openProposals(db, house.id),
+    openSwaps(db, house.id),
+    listTeams(db, house.id),
+  ]);
+  // People on no team are never on duty, so a house with teams should place everyone.
+  const placed = new Set(teams.flatMap((t) => t.memberIds));
+  const unplaced =
+    teams.length > 0 ? balances.filter((b) => b.status === "active" && !placed.has(b.memberId)) : [];
   // The viewer's own payments first: what they pay, what they get, then everyone else's.
   const involvesMe = (l: { fromMemberId: string; toMemberId: string }) =>
     l.fromMemberId === member.id || l.toMemberId === member.id;
@@ -184,6 +351,16 @@ export default async function HousePage({ searchParams }: Props) {
     (t) => t.status === "assigned" && t.assigneeMemberId !== member.id && !myTeams.includes(t),
   );
   const potTotal = balances.reduce((sum, b) => sum + b.balanceCents, 0);
+  // Proof waiting on the house, by turn: a turn with proof in is not waiting on anyone to do it.
+  const proofFor = new Map(pending.map((p) => [p.turnId, p]));
+  const toVoteOn = pending.filter((p) => p.memberId !== member.id);
+  const swapAsked = new Map(swaps.filter((s) => s.fromMemberId === member.id).map((s) => [s.turnId, s]));
+  const swapsForMe = swaps.filter((s) => s.toMemberId === member.id);
+  const housemates = balances.filter((b) => b.memberId !== member.id && b.status === "active");
+  // One-person turns others have waiting, which can be offered in exchange for a swap.
+  const theirTurns = turns.filter(
+    (t) => t.status === "assigned" && !t.teamId && t.assigneeMemberId !== member.id && !proofFor.has(t.id),
+  );
   const inviteUrl = `${await baseUrl()}/join/${house.inviteCode}`;
 
   return (
@@ -234,6 +411,17 @@ export default async function HousePage({ searchParams }: Props) {
               Tap one to email everyone on {duty.team.name}.
             </p>
           )}
+        </section>
+      )}
+
+      {unplaced.length > 0 && (
+        <section className="callout">
+          <h2>Put people on teams</h2>
+          <p>
+            {unplaced.map((b) => (b.memberId === member.id ? "You" : b.name)).join(", ")}{" "}
+            {unplaced.length === 1 ? "is" : "are"} on no team, so never on duty.{" "}
+            <Link href="/teams">Sort it out on the Teams tab</Link>
+          </p>
         </section>
       )}
 
@@ -332,34 +520,39 @@ export default async function HousePage({ searchParams }: Props) {
                   {turn.teamName && ` · ${turn.teamName}'s chore, and you have it`}
                   {turn.bountyCents > 0 && " · a bounty is waiting if you do it on time"}
                 </p>
-                <div className="actions">
-                  {turn.dueAt.getTime() - now.getTime() > DONE_OPENS_MS ? (
+                {proofFor.has(turn.id) ? (
+                  <ProofStatus proof={proofFor.get(turn.id)!} meId={member.id} now={now} tz={house.tz} />
+                ) : (
+                  <div className="actions">
+                    {turn.dueAt.getTime() - now.getTime() > DONE_OPENS_MS ? (
+                      <p className="small muted">
+                        You can mark it done from{" "}
+                        {midSentence(dueLabel(new Date(turn.dueAt.getTime() - DONE_OPENS_MS), now, house.tz))}
+                        .
+                      </p>
+                    ) : (
+                      <form action={doneAction}>
+                        <input type="hidden" name="turnId" value={turn.id} />
+                        <PhotoSubmit label="Done: add photos" />
+                      </form>
+                    )}
                     <p className="small muted">
-                      You can mark it done from{" "}
-                      {midSentence(dueLabel(new Date(turn.dueAt.getTime() - DONE_OPENS_MS), now, house.tz))}.
+                      {turn.teamId
+                        ? `Worth ${formatCents(turn.skipPriceCents)}. If nobody on ${turn.teamName} does it in time, the team shares that and it goes to whoever does it.`
+                        : `Worth ${formatCents(turn.skipPriceCents)}. Let it expire and that comes off your balance and goes to whoever does it.`}
                     </p>
-                  ) : (
-                    <form action={doneAction}>
-                      <input type="hidden" name="turnId" value={turn.id} />
-                      <PhotoSubmit label="Done" />
-                    </form>
-                  )}
-                  {turn.teamId ? (
-                    <p className="small muted">
-                      A team chore cannot be skipped. If nobody on {turn.teamName} does it, the{" "}
-                      {formatCents(turn.skipPriceCents)} is shared by the team.
-                    </p>
-                  ) : (
-                    <form action={skipAction}>
-                      <input type="hidden" name="turnId" value={turn.id} />
-                      <SubmitButton pendingLabel="Skipping…">
-                        {etransfer
-                          ? `Skip for ${formatCents(turn.skipPriceCents)}`
-                          : `Pay ${formatCents(turn.skipPriceCents)} to skip`}
-                      </SubmitButton>
-                    </form>
-                  )}
-                </div>
+                  </div>
+                )}
+                {!turn.teamId && !proofFor.has(turn.id) && housemates.length > 0 && (
+                  <SwapControls
+                    turn={turn}
+                    asked={swapAsked.get(turn.id)}
+                    housemates={housemates}
+                    theirTurns={theirTurns}
+                    now={now}
+                    tz={house.tz}
+                  />
+                )}
               </article>
             ))
           )}
@@ -378,18 +571,22 @@ export default async function HousePage({ searchParams }: Props) {
               <p className="meta">
                 {turn.assigneeName} has it · due {midSentence(dueLabel(turn.dueAt, now, house.tz))}
               </p>
-              <div className="actions">
-                {turn.dueAt.getTime() - now.getTime() <= DONE_OPENS_MS && (
-                  <form action={doneAction}>
+              {proofFor.has(turn.id) ? (
+                <ProofStatus proof={proofFor.get(turn.id)!} meId={member.id} now={now} tz={house.tz} />
+              ) : (
+                <div className="actions">
+                  {turn.dueAt.getTime() - now.getTime() <= DONE_OPENS_MS && (
+                    <form action={doneAction}>
+                      <input type="hidden" name="turnId" value={turn.id} />
+                      <PhotoSubmit label="I did it: add photos" />
+                    </form>
+                  )}
+                  <form action={assignTurnAction}>
                     <input type="hidden" name="turnId" value={turn.id} />
-                    <PhotoSubmit label="I did it" />
+                    <SubmitButton pendingLabel="Saving…">I'll take it</SubmitButton>
                   </form>
-                )}
-                <form action={assignTurnAction}>
-                  <input type="hidden" name="turnId" value={turn.id} />
-                  <SubmitButton pendingLabel="Saving…">I'll take it</SubmitButton>
-                </form>
-              </div>
+                </div>
+              )}
             </article>
           ))}
         </section>
@@ -405,68 +602,145 @@ export default async function HousePage({ searchParams }: Props) {
                 <span className="bounty">+{formatCents(turn.bountyCents)}</span>
               </div>
               <p className="meta">
-                {openReason(turn, member.id)} First to do it, with a photo, takes the money.
+                {openReason(turn, member.id)} The first person to do it and send photos takes the money, once
+                the house agrees it is done.
               </p>
-              {isActive && (
-                <div className="actions actions-one">
-                  <form action={claimAction}>
-                    <input type="hidden" name="turnId" value={turn.id} />
-                    <PhotoSubmit
-                      label={`Claim ${formatCents(turn.bountyCents)} with a photo`}
-                      className="btn btn-accent"
-                    />
-                  </form>
-                </div>
+              {proofFor.has(turn.id) ? (
+                <ProofStatus proof={proofFor.get(turn.id)!} meId={member.id} now={now} tz={house.tz} />
+              ) : expiredOnMe(turn, member) ? (
+                <p className="small muted">
+                  It expired on {turn.teamId ? "your team" : "you"}, so the money goes to whoever else does
+                  it.
+                </p>
+              ) : (
+                isActive && (
+                  <div className="actions actions-one">
+                    <form action={claimAction}>
+                      <input type="hidden" name="turnId" value={turn.id} />
+                      <PhotoSubmit
+                        label={`I did it: add photos for ${formatCents(turn.bountyCents)}`}
+                        className="btn btn-accent"
+                      />
+                    </form>
+                  </div>
+                )
               )}
             </article>
           ))}
         </section>
       )}
 
-      {disputes.length > 0 && (
+      {isActive && swapsForMe.length > 0 && (
         <section className="section">
-          <h2 className="label">Disputes</h2>
-          {disputes.map((d) => {
-            const myVote = d.votes[member.id];
-            const canVote = isActive && d.accusedMemberId !== member.id;
+          <h2 className="label">Asked to swap</h2>
+          {swapsForMe.map((s) => (
+            <article key={s.id} className="turn">
+              <div className="turn-head">
+                <h3>{s.choreName}</h3>
+              </div>
+              <p className="meta">
+                {s.fromName} asks you to take {s.choreName}, due{" "}
+                {midSentence(dueLabel(s.dueAt, now, house.tz))}.
+                {s.giveBack
+                  ? ` In exchange, ${s.fromName} does your ${s.giveBack.choreName}, due ${midSentence(dueLabel(s.giveBack.dueAt, now, house.tz))}.`
+                  : " Nothing in exchange: it is a favour."}{" "}
+                If you accept, it is yours, and if it expires it costs you.
+              </p>
+              <div className="actions">
+                <form action={swapAnswerAction}>
+                  <input type="hidden" name="requestId" value={s.id} />
+                  <input type="hidden" name="accept" value="yes" />
+                  <SubmitButton className="btn btn-primary">Accept</SubmitButton>
+                </form>
+                <form action={swapAnswerAction}>
+                  <input type="hidden" name="requestId" value={s.id} />
+                  <input type="hidden" name="accept" value="no" />
+                  <SubmitButton>Decline</SubmitButton>
+                </form>
+              </div>
+            </article>
+          ))}
+        </section>
+      )}
+
+      {proposals.length > 0 && (
+        <section className="section">
+          <h2 className="label">What chores are worth</h2>
+          {proposals.map((p) => {
+            const myVote = p.votes[member.id];
+            const mineToAsk = p.proposedById === member.id;
             return (
-              <article key={d.id} className="turn">
+              <article key={p.id} className="turn">
                 <div className="turn-head">
-                  <h3>{d.choreName}</h3>
-                  <span className="num small muted">
-                    {d.agreeCount} of {d.needed}
-                  </span>
+                  <h3>{p.choreName}</h3>
+                  <span className="bounty">{formatCents(p.worthCents)}</span>
                 </div>
                 <p className="meta">
-                  {d.raisedByName} says {d.accusedMemberId === member.id ? "you" : d.accusedName} did not
-                  really do it. Voting closes {midSentence(dueLabel(d.closesAt, now, house.tz))}.
-                  {d.photoId && (
-                    <>
-                      {" "}
-                      <a href={`/api/photos/${d.photoId}`} target="_blank" rel="noreferrer">
-                        See the photo
-                      </a>
-                    </>
-                  )}
+                  {mineToAsk ? "You" : p.proposedByName}{" "}
+                  {p.kind === "new"
+                    ? `${mineToAsk ? "want" : "wants"} to add this chore, worth ${formatCents(p.worthCents)}.`
+                    : `${mineToAsk ? "want" : "wants"} it to be worth ${formatCents(p.worthCents)} instead of ${formatCents(p.currentCents)}.`}{" "}
+                  That is what it costs if it expires, and what whoever does it instead takes. {p.yes} of{" "}
+                  {p.needed} agree so far; it lapses {midSentence(dueLabel(p.closesAt, now, house.tz))}.
                 </p>
-                {canVote && (
+                {isActive && !mineToAsk && (
                   <div className="actions">
-                    <form action={voteAction}>
-                      <input type="hidden" name="disputeId" value={d.id} />
+                    <form action={worthVoteAction}>
+                      <input type="hidden" name="proposalId" value={p.id} />
                       <input type="hidden" name="agree" value="yes" />
                       <SubmitButton className={myVote === true ? "btn btn-primary" : "btn"}>
-                        Not done
+                        Agree
                       </SubmitButton>
                     </form>
-                    <form action={voteAction}>
-                      <input type="hidden" name="disputeId" value={d.id} />
+                    <form action={worthVoteAction}>
+                      <input type="hidden" name="proposalId" value={p.id} />
                       <input type="hidden" name="agree" value="no" />
-                      <SubmitButton className={myVote === false ? "btn btn-primary" : "btn"}>
-                        It was done
-                      </SubmitButton>
+                      <SubmitButton className={myVote === false ? "btn btn-primary" : "btn"}>No</SubmitButton>
                     </form>
                   </div>
                 )}
+              </article>
+            );
+          })}
+        </section>
+      )}
+
+      {isActive && toVoteOn.length > 0 && (
+        <section className="section">
+          <h2 className="label">Did they do it?</h2>
+          {toVoteOn.map((p) => {
+            const myVote = p.votes[member.id];
+            return (
+              <article key={p.id} className="turn">
+                <div className="turn-head">
+                  <h3>{p.choreName}</h3>
+                  <span className="num small muted">
+                    {p.yes} of {p.needed}
+                  </span>
+                </div>
+                <p className="meta">
+                  {p.memberName} {p.kind === "claim" ? "did this expired chore" : "says it is done"}
+                  {p.payoutCents > 0 ? ` and gets ${formatCents(p.payoutCents)} if it counts` : ""}. It counts
+                  once {p.needed} {p.needed === 1 ? "person says" : "people say"} it looks done, or{" "}
+                  {midSentence(dueLabel(p.closesAt, now, house.tz))} if not enough say it is not.
+                </p>
+                <ProofPhotos proof={p} />
+                <div className="actions">
+                  <form action={approvalVoteAction}>
+                    <input type="hidden" name="submissionId" value={p.id} />
+                    <input type="hidden" name="approve" value="yes" />
+                    <SubmitButton className={myVote === true ? "btn btn-primary" : "btn"}>
+                      Looks done
+                    </SubmitButton>
+                  </form>
+                  <form action={approvalVoteAction}>
+                    <input type="hidden" name="submissionId" value={p.id} />
+                    <input type="hidden" name="approve" value="no" />
+                    <SubmitButton className={myVote === false ? "btn btn-primary" : "btn"}>
+                      Not done
+                    </SubmitButton>
+                  </form>
+                </div>
               </article>
             );
           })}
@@ -482,6 +756,7 @@ export default async function HousePage({ searchParams }: Props) {
                 {turn.choreName}{" "}
                 <span className="muted">
                   · {turn.teamName ? `${turn.teamName}, ${turn.assigneeName}` : turn.assigneeName}
+                  {proofFor.has(turn.id) ? " · photos sent" : ""}
                 </span>
               </span>
               <span className="leader" />
@@ -597,12 +872,6 @@ export default async function HousePage({ searchParams }: Props) {
           <ul className="feed">
             {activity.map((item) => {
               const line = describe(item, member.id);
-              const turnId = item.data.turnId as string | undefined;
-              const canDispute =
-                isActive &&
-                turnId &&
-                (item.kind === "done" || item.kind === "claimed") &&
-                disputable.has(turnId);
               return (
                 <li key={item.id}>
                   <div>
@@ -616,14 +885,6 @@ export default async function HousePage({ searchParams }: Props) {
                       ) : null}
                     </p>
                     <p className="when">{ago(item.createdAt, now)}</p>
-                    {canDispute && (
-                      <form action={disputeAction}>
-                        <input type="hidden" name="turnId" value={turnId} />
-                        <SubmitButton className="btn-quiet" pendingLabel="Raising…">
-                          Not actually done? Dispute
-                        </SubmitButton>
-                      </form>
-                    )}
                   </div>
                   {item.data.photoId && (
                     <a

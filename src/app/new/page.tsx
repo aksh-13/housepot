@@ -20,7 +20,8 @@ export default async function NewHousePage({ searchParams }: Props) {
       <section className="section">
         <h1 className="house-name">Start a house</h1>
         <p className="muted small" style={{ margin: "var(--space-2) 0 var(--space-5)" }}>
-          You will get a link to drop in your house chat.
+          A few questions, then a short walkthrough: your chores and what each is worth, then a link to drop
+          in your house chat.
         </p>
         <form action={createHouseAction}>
           {!user.name && (
@@ -75,13 +76,54 @@ export default async function NewHousePage({ searchParams }: Props) {
                   <option value="60">$60</option>
                 </select>
                 <span className="hint">
-                  You get back whatever is left at the end of term. A skipped chore costs $5 by default.
+                  You get back whatever is left at the end of term. An expired chore costs its worth, $5 by
+                  default.
                 </span>
               </div>
             </>
           ) : (
             <input type="hidden" name="moneyMode" value="etransfer" />
           )}
+          <fieldset className="field">
+            <legend>How does your house share chores?</legend>
+            <label className="check">
+              <input type="radio" name="sharing" value="turns" defaultChecked />
+              <span>
+                <strong>Everyone takes turns.</strong> Each chore goes round the whole house, one person at a
+                time.
+              </span>
+            </label>
+            <label className="check">
+              <input type="radio" name="sharing" value="teams" />
+              <span>
+                <strong>Teams take turns on duty.</strong> For bigger houses: one team is on duty for a week
+                or more, then the next. You can still have one-person chores too.
+              </span>
+            </label>
+          </fieldset>
+          <div className="pair">
+            <div className="field">
+              <label htmlFor="teamCount">Teams (if you use them)</label>
+              <select id="teamCount" name="teamCount" className="input" defaultValue="2">
+                <option value="2">2 teams</option>
+                <option value="3">3 teams</option>
+                <option value="4">4 teams</option>
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="teamWeeks">Each on duty for</label>
+              <select id="teamWeeks" name="teamWeeks" className="input" defaultValue="1">
+                <option value="1">1 week</option>
+                <option value="2">2 weeks</option>
+                <option value="3">3 weeks</option>
+                <option value="4">4 weeks</option>
+              </select>
+            </div>
+          </div>
+          <p className="hint" style={{ marginBottom: "var(--space-4)" }}>
+            Housemates pick their team when they join. Names, lengths and who is on which can all change later
+            on the Teams tab.
+          </p>
           <SubmitButton className="btn btn-primary btn-block" pendingLabel="Creating…">
             Create the house
           </SubmitButton>

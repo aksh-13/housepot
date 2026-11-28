@@ -2,13 +2,14 @@
 
 import { notFound, redirect } from "next/navigation";
 import { getDb } from "@/db";
+import { type Decision, MAX_PHOTOS, submitClaim, submitDone, voteOnSubmission } from "@/domain/approvals";
 import { endSession, normalizePhone, requestCode, setUserName, verifyCode } from "@/domain/auth";
 import { billInputFromForm, createBill, deleteBill, editBill } from "@/domain/bills";
 import { createChore, ensureTurns, updateChore } from "@/domain/chores";
-import { raiseDispute, voteDispute } from "@/domain/disputes";
 import { fakeReceivedEmail, fakeRequestEmail } from "@/domain/fakeInterac";
 import {
   createHouse,
+  finishOnboarding,
   joinHouse,
   memberById,
   normalizeEmail,
@@ -31,9 +32,19 @@ import {
   textDebtPaid,
   textNewDebts,
 } from "@/domain/settleup";
-import { addNudge, addTeam, removeNudge, removeTeam, saveTeams, sendNudge } from "@/domain/teams";
-import { assignTurn, claimBounty, markDone, payToSkip } from "@/domain/turns";
-import { textBountyOpen } from "@/domain/views";
+import { answerSwap, cancelSwap, requestSwap } from "@/domain/swaps";
+import {
+  addNudge,
+  addTeam,
+  joinTeam,
+  removeNudge,
+  removeTeam,
+  saveTeams,
+  sendNudge,
+  setUpTeams,
+} from "@/domain/teams";
+import { assignTurn } from "@/domain/turns";
+import { voteOnProposal } from "@/domain/worth";
 import {
   baseUrl,
   clearSessionCookie,
@@ -110,15 +121,26 @@ async function ensureName(userId: string, current: string | null, given: string)
 export async function createHouseAction(fd: FormData): Promise<void> {
   const user = await requireUser("/new");
   if (!(await ensureName(user.id, user.name, str(fd, "name")))) back("/new", "error", "Tell us your name.");
+  const now = new Date();
   const created = await createHouse(getDb(), {
     userId: user.id,
     houseName: str(fd, "houseName"),
     depositCents: dollarsToCents(str(fd, "deposit") || "20"),
     moneyMode: str(fd, "moneyMode") === "card" ? "card" : "etransfer",
-    now: new Date(),
+    now,
   });
   if (!created.ok) back("/new", "error", created.error);
-  redirect("/house");
+  if (str(fd, "sharing") === "teams") {
+    const teams = await setUpTeams(getDb(), {
+      houseId: created.houseId,
+      memberId: created.memberId,
+      count: Number(str(fd, "teamCount") || "2"),
+      weeks: Number(str(fd, "teamWeeks") || "1"),
+      now,
+    });
+    if (!teams.ok) back("/welcome", "error", teams.error);
+  }
+  redirect("/welcome");
 }
 
 export async function joinHouseAction(fd: FormData): Promise<void> {
@@ -128,7 +150,7 @@ export async function joinHouseAction(fd: FormData): Promise<void> {
   if (!(await ensureName(user.id, user.name, str(fd, "name")))) back(path, "error", "Tell us your name.");
   const joined = await joinHouse(getDb(), { userId: user.id, inviteCode: code, now: new Date() });
   if (!joined.ok) back(path, "error", joined.error);
-  redirect("/house");
+  redirect("/welcome");
 }
 
 /** Settings: change the name housemates see. */
@@ -176,126 +198,154 @@ export async function fakePayAction(fd: FormData): Promise<void> {
 
 // ── Turns ─────────────────────────────────────────────────────────────────────
 
-async function photoFrom(fd: FormData, houseId: string, memberId: string) {
-  const file = fd.get("photo");
-  if (!(file instanceof File) || file.size === 0) {
-    return { ok: false as const, error: "Add a photo of the finished chore." };
+/** Saves the one to four proof photos sent with the form. */
+async function photosFrom(
+  fd: FormData,
+  houseId: string,
+  memberId: string,
+): Promise<{ ok: true; photoIds: string[] } | { ok: false; error: string }> {
+  const files = fd.getAll("photo").filter((f): f is File => f instanceof File && f.size > 0);
+  if (files.length === 0) return { ok: false, error: "Add a photo of the finished chore." };
+  if (files.length > MAX_PHOTOS) return { ok: false, error: `Send up to ${MAX_PHOTOS} photos.` };
+  const photoIds: string[] = [];
+  for (const file of files) {
+    const saved = await savePhoto(getDb(), getProviders().storage, {
+      houseId,
+      memberId,
+      bytes: Buffer.from(await file.arrayBuffer()),
+      contentType: file.type,
+      now: new Date(),
+    });
+    if (!saved.ok) return saved;
+    photoIds.push(saved.photoId);
   }
-  return savePhoto(getDb(), getProviders().storage, {
-    houseId,
-    memberId,
-    bytes: Buffer.from(await file.arrayBuffer()),
-    contentType: file.type,
-    now: new Date(),
-  });
+  return { ok: true, photoIds };
+}
+
+/** Tells whoever sent proof how the house decided. Nothing is sent while the vote is still open. */
+async function textDecision(memberId: string, choreName: string, decision: Decision, payoutCents: number) {
+  if (decision === "pending") return;
+  const db = getDb();
+  const member = await memberById(db, memberId);
+  if (!member) return;
+  const link = `${await baseUrl()}/house`;
+  const body =
+    decision === "approved"
+      ? `The house approved ${choreName}.${payoutCents > 0 ? ` +${formatCents(payoutCents)} to you.` : ""} ${link}`
+      : `The house said ${choreName} was not done. Your balance is now ${formatCents(await memberBalance(db, memberId))}. ${link}`;
+  await getProviders()
+    .sms.send(member.contact, body)
+    .catch((err) => console.error("Decision text failed:", err));
+}
+
+function sentNotice(decision: Decision, payoutCents: number): string {
+  if (decision === "approved") {
+    return payoutCents > 0 ? `Done. ${formatCents(payoutCents)} is yours.` : "Done. Nice one.";
+  }
+  return "Sent. It counts once most of the house says it looks done, or after 48 hours unless most say it is not.";
 }
 
 export async function doneAction(fd: FormData): Promise<void> {
   const { member, house } = await requireMember();
-  const photo = await photoFrom(fd, house.id, member.id);
-  if (!photo.ok) back("/house", "error", photo.error);
+  const photos = await photosFrom(fd, house.id, member.id);
+  if (!photos.ok) back("/house", "error", photos.error);
   const now = new Date();
-  const done = await markDone(getDb(), {
+  const sent = await submitDone(getDb(), {
     turnId: str(fd, "turnId"),
     memberId: member.id,
-    photoId: photo.photoId,
+    photoIds: photos.photoIds,
     now,
   });
-  if (!done.ok) back("/house", "error", done.error);
-  await ensureTurns(getDb(), house.id, now);
-  back(
-    "/house",
-    "notice",
-    done.payoutCents
-      ? `Done. You collected ${formatCents(done.payoutCents)} left on the chore.`
-      : "Done. Nice one.",
-  );
-}
-
-export async function skipAction(fd: FormData): Promise<void> {
-  const { member, house } = await requireMember();
-  const db = getDb();
-  const turnId = str(fd, "turnId");
-  const now = new Date();
-  const skipped = await payToSkip(db, { turnId, memberId: member.id, now });
-  if (!skipped.ok) back("/house", "error", skipped.error);
-  const turn = await db.query<{ chore_id: string; name: string }>(
-    "select t.chore_id, c.name from turns t join chores c on c.id = t.chore_id where t.id = $1",
-    [turnId],
-  );
-  if (turn.rows[0]) {
-    await textBountyOpen(db, getProviders().sms, {
-      houseId: house.id,
-      choreId: turn.rows[0].chore_id,
-      choreName: turn.rows[0].name,
-      exceptMemberId: member.id,
-      link: `${await baseUrl()}/house`,
-    });
-  }
-  await ensureTurns(db, house.id, now);
-  back(
-    "/house",
-    "notice",
-    "Skipped. It is open to the house now, and you can still win it back by doing it.",
-  );
+  if (!sent.ok) back("/house", "error", sent.error);
+  if (sent.decision === "approved") await ensureTurns(getDb(), house.id, now);
+  back("/house", "notice", sentNotice(sent.decision, sent.payoutCents));
 }
 
 export async function claimAction(fd: FormData): Promise<void> {
   const { member, house } = await requireMember();
-  const photo = await photoFrom(fd, house.id, member.id);
-  if (!photo.ok) back("/house", "error", photo.error);
-  const claimed = await claimBounty(getDb(), {
+  const photos = await photosFrom(fd, house.id, member.id);
+  if (!photos.ok) back("/house", "error", photos.error);
+  const sent = await submitClaim(getDb(), {
     turnId: str(fd, "turnId"),
     memberId: member.id,
-    photoId: photo.photoId,
+    photoIds: photos.photoIds,
     now: new Date(),
   });
-  if (!claimed.ok) back("/house", "error", claimed.error);
-  back("/house", "notice", `Claimed. ${formatCents(claimed.payoutCents ?? 0)} is yours.`);
+  if (!sent.ok) back("/house", "error", sent.error);
+  back("/house", "notice", sentNotice(sent.decision, sent.payoutCents));
 }
 
-// ── Disputes ──────────────────────────────────────────────────────────────────
-
-async function textDisputePassed(accusedMemberId: string, choreName: string): Promise<void> {
-  const db = getDb();
-  const accused = await memberById(db, accusedMemberId);
-  if (!accused) return;
-  const balance = formatCents(await memberBalance(db, accusedMemberId));
-  await getProviders()
-    .sms.send(
-      accused.contact,
-      `The house voted that ${choreName} was not done. Your balance is now ${balance}. ${await baseUrl()}/house`,
-    )
-    .catch((err) => console.error("Dispute text failed:", err));
-}
-
-export async function disputeAction(fd: FormData): Promise<void> {
+/** Asks a housemate to take one of your turns, optionally doing one of theirs in exchange. */
+export async function swapRequestAction(fd: FormData): Promise<void> {
   const { member } = await requireMember();
-  const raised = await raiseDispute(getDb(), {
+  const db = getDb();
+  const toMemberId = str(fd, "toMemberId");
+  const asked = await requestSwap(db, {
     turnId: str(fd, "turnId"),
+    memberId: member.id,
+    toMemberId,
+    giveBackTurnId: str(fd, "giveBackTurnId") || undefined,
+    now: new Date(),
+  });
+  if (!asked.ok) back("/house", "error", asked.error);
+  // They have to answer it, so they hear about it once. Nothing else about a swap sends a message.
+  const to = await memberById(db, toMemberId);
+  if (to) {
+    await getProviders()
+      .sms.send(
+        to.contact,
+        `${member.name ?? "A housemate"} asked you to take a chore. ${await baseUrl()}/house`,
+      )
+      .catch((err) => console.error("Swap text failed:", err));
+  }
+  back("/house", "notice", `Asked. It stays yours until ${to?.name ?? "they"} accepts.`);
+}
+
+export async function swapAnswerAction(fd: FormData): Promise<void> {
+  const { member } = await requireMember();
+  const answered = await answerSwap(getDb(), {
+    requestId: str(fd, "requestId"),
+    memberId: member.id,
+    accept: str(fd, "accept") === "yes",
+    now: new Date(),
+  });
+  if (!answered.ok) back("/house", "error", answered.error);
+  back("/house", "notice", answered.accepted ? "Swapped. It is yours now." : "Declined.");
+}
+
+export async function swapCancelAction(fd: FormData): Promise<void> {
+  const { member } = await requireMember();
+  const cancelled = await cancelSwap(getDb(), {
+    requestId: str(fd, "requestId"),
     memberId: member.id,
     now: new Date(),
   });
-  if (!raised.ok) back("/house", "error", raised.error);
-  if (raised.passed) await textDisputePassed(raised.accusedMemberId, raised.choreName);
+  if (!cancelled.ok) back("/house", "error", cancelled.error);
+  back("/house", "notice", "Request cancelled.");
+}
+
+/** "Looks done" or "Not done" on someone else's proof. */
+export async function approvalVoteAction(fd: FormData): Promise<void> {
+  const { member, house } = await requireMember();
+  const now = new Date();
+  const voted = await voteOnSubmission(getDb(), {
+    submissionId: str(fd, "submissionId"),
+    memberId: member.id,
+    approve: str(fd, "approve") === "yes",
+    now,
+  });
+  if (!voted.ok) back("/house", "error", voted.error);
+  await textDecision(voted.submitterMemberId, voted.choreName, voted.decision, voted.payoutCents);
+  if (voted.decision !== "pending") await ensureTurns(getDb(), house.id, now);
   back(
     "/house",
     "notice",
-    raised.passed ? "Dispute upheld. The chore is open again." : "Dispute raised. Your housemates can vote.",
+    voted.decision === "approved"
+      ? `That makes a majority: ${voted.choreName} counts.`
+      : voted.decision === "rejected"
+        ? `That makes a majority: ${voted.choreName} does not count.`
+        : "Vote counted.",
   );
-}
-
-export async function voteAction(fd: FormData): Promise<void> {
-  const { member } = await requireMember();
-  const voted = await voteDispute(getDb(), {
-    disputeId: str(fd, "disputeId"),
-    memberId: member.id,
-    agree: str(fd, "agree") === "yes",
-    now: new Date(),
-  });
-  if (!voted.ok) back("/house", "error", voted.error);
-  if (voted.passed) await textDisputePassed(voted.accusedMemberId, voted.choreName);
-  back("/house", "notice", voted.passed ? "Dispute upheld. The chore is open again." : "Vote counted.");
 }
 
 // ── Chores ────────────────────────────────────────────────────────────────────
@@ -321,9 +371,16 @@ export async function addChoreAction(fd: FormData): Promise<void> {
     teamDuty: str(fd, "doneBy") === "team",
     now,
   });
-  if (!created.ok) back("/house/chores", "error", created.error);
+  if (!created.ok) back(welcomeStep(fd, true) ?? "/house/chores", "error", created.error);
   await ensureTurns(getDb(), house.id, now);
-  back("/house/chores", "notice", "Chore added.");
+  if (welcomeStep(fd, true)) back(welcomeStep(fd, true)!, "notice", `${str(fd, "name")} added.`);
+  back(
+    "/house/chores",
+    "notice",
+    created.proposed
+      ? "Proposed. It starts once most of the house agrees to it and what it is worth."
+      : "Chore added.",
+  );
 }
 
 export async function updateChoreAction(fd: FormData): Promise<void> {
@@ -342,7 +399,13 @@ export async function updateChoreAction(fd: FormData): Promise<void> {
   });
   if (!updated.ok) back("/house/chores", "error", updated.error);
   await ensureTurns(getDb(), house.id, now);
-  back("/house/chores", "notice", "Chore saved.");
+  back(
+    "/house/chores",
+    "notice",
+    updated.proposed
+      ? "Saved. The new worth is proposed, and applies once most of the house agrees."
+      : "Chore saved.",
+  );
 }
 
 export async function archiveChoreAction(fd: FormData): Promise<void> {
@@ -355,6 +418,53 @@ export async function archiveChoreAction(fd: FormData): Promise<void> {
   });
   if (!archived.ok) back("/house/chores", "error", archived.error);
   back("/house/chores", "notice", "Chore removed.");
+}
+
+/** Agree or disagree with a proposed chore or a proposed new worth. */
+export async function worthVoteAction(fd: FormData): Promise<void> {
+  const { member, house } = await requireMember();
+  const now = new Date();
+  const voted = await voteOnProposal(getDb(), {
+    proposalId: str(fd, "proposalId"),
+    memberId: member.id,
+    agree: str(fd, "agree") === "yes",
+    now,
+  });
+  if (!voted.ok) back("/house", "error", voted.error);
+  if (voted.decision === "accepted") await ensureTurns(getDb(), house.id, now);
+  back(
+    "/house",
+    "notice",
+    voted.decision === "accepted"
+      ? "Agreed by the house."
+      : voted.decision === "rejected"
+        ? "Most of the house said no, so it does not go ahead."
+        : "Vote counted.",
+  );
+}
+
+// ── First-run walkthrough ─────────────────────────────────────────────────────
+
+/**
+ * Forms in the walkthrough carry the step they came from ("here") and the one to go to ("next"),
+ * so a saved form moves the walkthrough on, and a refused one shows its error on the same step.
+ */
+function welcomeStep(fd: FormData, here = false): string | null {
+  const step = str(fd, here ? "welcomeHere" : "welcomeNext");
+  return /^[a-z]+$/.test(step) ? `/welcome?step=${step}` : null;
+}
+
+export async function joinTeamAction(fd: FormData): Promise<void> {
+  const { member } = await requireMember("/welcome");
+  const joined = await joinTeam(getDb(), { memberId: member.id, teamId: str(fd, "teamId"), now: new Date() });
+  if (!joined.ok) back(welcomeStep(fd, true) ?? "/teams", "error", joined.error);
+  back(welcomeStep(fd) ?? "/teams", "notice", "You are on the team.");
+}
+
+export async function finishWelcomeAction(): Promise<void> {
+  const { member } = await requireMember("/welcome");
+  await finishOnboarding(getDb(), member.id, new Date());
+  redirect("/house");
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────────
@@ -564,8 +674,9 @@ export async function savePayoutAction(fd: FormData): Promise<void> {
     etransferEmail: str(fd, "etransferEmail"),
     bank: str(fd, "bank"),
   });
-  if (!saved.ok) back("/house/settings", "error", saved.error);
-  back(str(fd, "back") === "settle" ? "/settle" : "/house/settings", "notice", "Saved.");
+  const to = welcomeStep(fd) ?? (str(fd, "back") === "settle" ? "/settle" : "/house/settings");
+  if (!saved.ok) back(welcomeStep(fd, true) ?? "/house/settings", "error", saved.error);
+  back(to, "notice", "Saved.");
 }
 
 /** "Settle up now": turns the balances into payments straight away. Any housemate, no vote. */

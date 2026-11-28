@@ -2,7 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, test } from "vitest";
-import { createChore, ensureTurns } from "@/domain/chores";
+import { ensureTurns } from "@/domain/chores";
 import { choreBounty, memberBalance } from "@/domain/ledger";
 import { savePhoto } from "@/domain/photos";
 import {
@@ -17,12 +17,12 @@ import {
   teamOnDuty,
 } from "@/domain/teams";
 import { runTick } from "@/domain/tick";
-import { assignTurn, claimBounty, markDone, missTurn, payToSkip, skipWaitingTurnsOf } from "@/domain/turns";
+import { assignTurn, expireWaitingTurnsOf, missTurn } from "@/domain/turns";
 import { houseTurns } from "@/domain/views";
 import { fakePayments } from "@/providers/payments";
 import { fakeSms } from "@/providers/sms";
 import { diskStorage } from "@/providers/storage";
-import { db, makeHouse, resetDb, type TestHouse } from "./helpers";
+import { addChore, claimBounty, db, makeHouse, markDone, resetDb, type TestHouse } from "./helpers";
 
 const NOW = new Date("2026-11-11T17:00:00Z"); // Wed noon Toronto, inside Team A's first two weeks
 const LATE = new Date("2026-11-13T02:00:01Z"); // just past Thursday's 9pm deadline
@@ -75,7 +75,7 @@ async function photo(memberId: string): Promise<string> {
   return r.photoId;
 }
 async function garbage(teamDuty = true): Promise<string> {
-  const r = await createChore(db, {
+  const r = await addChore(db, {
     houseId: house.houseId,
     memberId: cy,
     name: "Garbage",
@@ -150,16 +150,6 @@ describe("a chore for the team on duty", () => {
     expect(await balances()).toEqual([0, 0, 0, 0]);
   });
 
-  test("it cannot be skipped for a price", async () => {
-    await garbage();
-    const turn = await waiting();
-    expect(await payToSkip(db, { turnId: turn.id, memberId: ana, now: NOW })).toEqual({
-      ok: false,
-      error: "A team chore cannot be skipped. Someone on the team does it, or the whole team is charged.",
-    });
-    expect(await balances()).toEqual([0, 0, 0, 0]);
-  });
-
   test("a miss charges everyone on the team an equal share, and nobody else", async () => {
     const choreId = await garbage();
     const turn = await waiting();
@@ -214,8 +204,8 @@ describe("a chore for the team on duty", () => {
 
   test("someone leaving is not charged for a turn that belongs to their team", async () => {
     await garbage();
-    await db.tx((t) => skipWaitingTurnsOf(t, ana, NOW));
-    await db.tx((t) => skipWaitingTurnsOf(t, ben, NOW));
+    await db.tx((t) => expireWaitingTurnsOf(t, ana, NOW));
+    await db.tx((t) => expireWaitingTurnsOf(t, ben, NOW));
     expect(await balances()).toEqual([0, 0, 0, 0]);
     expect((await waiting()).team_id).toBe(teamA);
   });
@@ -361,7 +351,7 @@ describe("the scheduler and team chores", () => {
     const toAna = sent.filter((m) => m.to_phone === house.members[0].phone).map((m) => m.body);
     const toCy = sent.filter((m) => m.to_phone === house.members[2].phone).map((m) => m.body);
     expect(toAna).toEqual([
-      "Your team missed Garbage. The $5 was split between everyone on the team, and your balance is now -$2.50. Do it before a housemate does to win it back: https://housepot.test/house",
+      "Your team missed Garbage. The $5 was split between everyone on the team, and your balance is now -$2.50. It is open to the house now: whoever does it takes it. https://housepot.test/house",
     ]);
     expect(toCy).toEqual([
       "Garbage is open: +$5 to whoever does it, with a photo. https://housepot.test/house",
@@ -370,15 +360,19 @@ describe("the scheduler and team chores", () => {
 });
 
 describe("who on the team has which chore", () => {
+  // Chores are handed out oldest first, so each gets its own creation time: with the same time the
+  // order would fall to their random ids and the test would pass or fail by chance.
+  let added = 0;
   async function chore(name: string): Promise<void> {
-    const r = await createChore(db, {
+    added += 1;
+    const r = await addChore(db, {
       houseId: house.houseId,
       memberId: cy,
       name,
       schedule: { kind: "weekly", weekday: 4 },
       deadlineTime: "21:00",
       teamDuty: true,
-      now: NOW,
+      now: new Date(NOW.getTime() + added),
     });
     if (!r.ok) throw new Error(r.error);
   }
