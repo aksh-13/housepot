@@ -45,6 +45,8 @@ export async function propose(
     memberId: string;
     kind: "new" | "worth";
     worthCents: number;
+    /** For a new chore that starts with someone other than the person proposing it. */
+    firstName?: string;
     now: Date;
   },
 ): Promise<string | null> {
@@ -58,7 +60,12 @@ export async function propose(
     houseId: a.houseId,
     memberId: a.memberId,
     kind: "worth_proposed",
-    data: { name: a.choreName, worthCents: a.worthCents, proposal: a.kind },
+    data: {
+      name: a.choreName,
+      worthCents: a.worthCents,
+      proposal: a.kind,
+      ...(a.firstName ? { firstName: a.firstName } : {}),
+    },
     now: a.now,
   });
   return rows[0].id;

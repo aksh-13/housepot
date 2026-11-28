@@ -242,7 +242,7 @@ function sentNotice(decision: Decision, payoutCents: number): string {
   if (decision === "approved") {
     return payoutCents > 0 ? `Done. ${formatCents(payoutCents)} is yours.` : "Done. Nice one.";
   }
-  return "Sent. It counts once most of the house says it looks done, or after 48 hours if nobody objects.";
+  return "Sent. It counts once most of the house says it looks done, or after 48 hours unless most say it is not.";
 }
 
 export async function doneAction(fd: FormData): Promise<void> {

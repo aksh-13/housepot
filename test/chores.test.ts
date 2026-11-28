@@ -284,7 +284,10 @@ test("the activity feed says who a new chore starts with when it is someone else
   const house = await makeHouse(2);
   await chore(house, 0, house.members[1].memberId);
   await chore(house, 0);
-  const { rows } = await db.query("select data from activity where kind = 'chore_added'");
+  // In a house of two a new chore is a proposal, so the proposal is what the feed shows.
+  const { rows } = await db.query(
+    "select data from activity where kind in ('chore_added', 'worth_proposed')",
+  );
   // Both were added at the same moment, so the feed's order between them is not fixed.
   const names = rows.map((r) => r.data.firstName ?? null).sort();
   expect(rows.every((r) => r.data.name === "Dishes")).toBe(true);

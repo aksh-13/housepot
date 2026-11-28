@@ -20,8 +20,8 @@ export default async function NewHousePage({ searchParams }: Props) {
       <section className="section">
         <h1 className="house-name">Start a house</h1>
         <p className="muted small" style={{ margin: "var(--space-2) 0 var(--space-5)" }}>
-          Two questions, then a short walkthrough: your chores and what each is worth, then a link to drop in
-          your house chat.
+          A few questions, then a short walkthrough: your chores and what each is worth, then a link to drop
+          in your house chat.
         </p>
         <form action={createHouseAction}>
           {!user.name && (

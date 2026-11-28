@@ -160,13 +160,16 @@ export async function createChore(
       ],
     );
     const choreId = rows[0].id;
-    await logActivity(t, {
-      houseId: a.houseId,
-      memberId: a.memberId,
-      kind: "chore_added",
-      data: first.id === a.memberId ? { name } : { name, firstName: first.name },
-      now: a.now,
-    });
+    // A proposed chore shows in the feed as the proposal; "added" is for one that starts now.
+    if (!proposed) {
+      await logActivity(t, {
+        houseId: a.houseId,
+        memberId: a.memberId,
+        kind: "chore_added",
+        data: first.id === a.memberId ? { name } : { name, firstName: first.name },
+        now: a.now,
+      });
+    }
     if (proposed) {
       await propose(t, {
         houseId: a.houseId,
@@ -174,6 +177,7 @@ export async function createChore(
         choreName: name,
         memberId: a.memberId,
         kind: "new",
+        ...(first.id === a.memberId ? {} : { firstName: first.name }),
         worthCents: skipPriceCents,
         now: a.now,
       });

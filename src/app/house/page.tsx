@@ -92,7 +92,7 @@ function describe(item: ActivityItem, meId: string): { text: string; cents?: num
       return {
         text:
           item.data.proposal === "new"
-            ? `${who} proposed ${item.data.name}, worth ${formatCents(Number(item.data.worthCents))}`
+            ? `${who} proposed ${item.data.name}, worth ${formatCents(Number(item.data.worthCents))}${item.data.firstName ? `, starting with ${item.data.firstName}` : ""}`
             : `${who} proposed ${item.data.name} be worth ${formatCents(Number(item.data.worthCents))}`,
       };
     case "worth_agreed":
@@ -200,8 +200,8 @@ function SwapControls({
       <div className="swap-asked">
         <p className="small muted">
           You asked {asked.toName} to take it
-          {asked.giveBack ? ` for your doing their ${asked.giveBack.choreName}` : ""}. It stays yours until
-          they accept.
+          {asked.giveBack ? ` in exchange for you doing their ${asked.giveBack.choreName}` : ""}. It stays
+          yours until they accept.
         </p>
         <form action={swapCancelAction}>
           <input type="hidden" name="requestId" value={asked.id} />
@@ -756,6 +756,7 @@ export default async function HousePage({ searchParams }: Props) {
                 {turn.choreName}{" "}
                 <span className="muted">
                   · {turn.teamName ? `${turn.teamName}, ${turn.assigneeName}` : turn.assigneeName}
+                  {proofFor.has(turn.id) ? " · photos sent" : ""}
                 </span>
               </span>
               <span className="leader" />
