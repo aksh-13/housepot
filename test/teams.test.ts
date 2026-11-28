@@ -360,7 +360,11 @@ describe("the scheduler and team chores", () => {
 });
 
 describe("who on the team has which chore", () => {
+  // Chores are handed out oldest first, so each gets its own creation time: with the same time the
+  // order would fall to their random ids and the test would pass or fail by chance.
+  let added = 0;
   async function chore(name: string): Promise<void> {
+    added += 1;
     const r = await createChore(db, {
       houseId: house.houseId,
       memberId: cy,
@@ -368,7 +372,7 @@ describe("who on the team has which chore", () => {
       schedule: { kind: "weekly", weekday: 4 },
       deadlineTime: "21:00",
       teamDuty: true,
-      now: NOW,
+      now: new Date(NOW.getTime() + added),
     });
     if (!r.ok) throw new Error(r.error);
   }
