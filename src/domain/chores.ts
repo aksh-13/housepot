@@ -337,7 +337,7 @@ export async function ensureTurns(db: Db, houseId: string, now: Date): Promise<n
 
     const last = await db.query<{ due_at: Date; position: number }>(
       `select t.due_at, m.rotation_position as position
-       from turns t join members m on m.id = t.assignee_member_id
+       from turns t join members m on m.id = coalesce(t.rotation_member_id, t.assignee_member_id)
        where t.chore_id = $1 and t.status <> 'cancelled' order by t.due_at desc limit 1`,
       [chore.id],
     );

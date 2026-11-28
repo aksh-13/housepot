@@ -31,6 +31,7 @@ import {
   textDebtPaid,
   textNewDebts,
 } from "@/domain/settleup";
+import { answerSwap, cancelSwap, requestSwap } from "@/domain/swaps";
 import { addNudge, addTeam, removeNudge, removeTeam, saveTeams, sendNudge } from "@/domain/teams";
 import { assignTurn } from "@/domain/turns";
 import { voteOnProposal } from "@/domain/worth";
@@ -251,6 +252,55 @@ export async function claimAction(fd: FormData): Promise<void> {
   });
   if (!sent.ok) back("/house", "error", sent.error);
   back("/house", "notice", sentNotice(sent.decision, sent.payoutCents));
+}
+
+/** Asks a housemate to take one of your turns, optionally doing one of theirs in exchange. */
+export async function swapRequestAction(fd: FormData): Promise<void> {
+  const { member } = await requireMember();
+  const db = getDb();
+  const toMemberId = str(fd, "toMemberId");
+  const asked = await requestSwap(db, {
+    turnId: str(fd, "turnId"),
+    memberId: member.id,
+    toMemberId,
+    giveBackTurnId: str(fd, "giveBackTurnId") || undefined,
+    now: new Date(),
+  });
+  if (!asked.ok) back("/house", "error", asked.error);
+  // They have to answer it, so they hear about it once. Nothing else about a swap sends a message.
+  const to = await memberById(db, toMemberId);
+  if (to) {
+    await getProviders()
+      .sms.send(
+        to.contact,
+        `${member.name ?? "A housemate"} asked you to take a chore. ${await baseUrl()}/house`,
+      )
+      .catch((err) => console.error("Swap text failed:", err));
+  }
+  back("/house", "notice", `Asked. It stays yours until ${to?.name ?? "they"} accepts.`);
+}
+
+export async function swapAnswerAction(fd: FormData): Promise<void> {
+  const { member } = await requireMember();
+  const answered = await answerSwap(getDb(), {
+    requestId: str(fd, "requestId"),
+    memberId: member.id,
+    accept: str(fd, "accept") === "yes",
+    now: new Date(),
+  });
+  if (!answered.ok) back("/house", "error", answered.error);
+  back("/house", "notice", answered.accepted ? "Swapped. It is yours now." : "Declined.");
+}
+
+export async function swapCancelAction(fd: FormData): Promise<void> {
+  const { member } = await requireMember();
+  const cancelled = await cancelSwap(getDb(), {
+    requestId: str(fd, "requestId"),
+    memberId: member.id,
+    now: new Date(),
+  });
+  if (!cancelled.ok) back("/house", "error", cancelled.error);
+  back("/house", "notice", "Request cancelled.");
 }
 
 /** "Looks done" or "Not done" on someone else's proof. */

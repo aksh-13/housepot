@@ -12,6 +12,7 @@ import { choreBounty, memberBalance } from "./ledger";
 import { applyPaymentEvent } from "./payments";
 import { settleHouse } from "./settlement";
 import { FIRST_REMINDER_MS, howToPay } from "./settleup";
+import { lapseSwaps } from "./swaps";
 import { missTurn } from "./turns";
 import { closeOldProposals } from "./worth";
 
@@ -265,6 +266,7 @@ async function tickEtransferHouse(ctx: Ctx, house: House): Promise<void> {
   await remindDebts(ctx, house);
   if (house.paused) return;
   await closeOldProposals(ctx.db, house.id, ctx.now);
+  await lapseSwaps(ctx.db, house.id, ctx.now);
   ctx.summary.approvalsClosed += await closeTimedOutSubmissions(ctx.db, house.id, ctx.now);
   await chargeMisses(ctx, house, await activeMembers(ctx.db, house.id));
   ctx.summary.turnsCreated += await ensureTurns(ctx.db, house.id, ctx.now);
@@ -281,6 +283,7 @@ async function tickHouse(ctx: Ctx, house: House): Promise<void> {
   if (house.paused) return;
 
   await closeOldProposals(ctx.db, house.id, ctx.now);
+  await lapseSwaps(ctx.db, house.id, ctx.now);
   ctx.summary.approvalsClosed += await closeTimedOutSubmissions(ctx.db, house.id, ctx.now);
   await chargeMisses(ctx, house, await activeMembers(ctx.db, house.id));
   ctx.summary.turnsCreated += await ensureTurns(ctx.db, house.id, ctx.now);

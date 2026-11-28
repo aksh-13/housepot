@@ -7,6 +7,9 @@ import {
   nudgeAction,
   payAction,
   settleNowAction,
+  swapAnswerAction,
+  swapCancelAction,
+  swapRequestAction,
   worthVoteAction,
 } from "@/app/actions";
 import { PhotoSubmit, ShareLink, SubmitButton } from "@/components/buttons";
@@ -20,6 +23,7 @@ import { pendingSubmissions, type SubmissionView } from "@/domain/approvals";
 import { listChores } from "@/domain/chores";
 import { houseBalances } from "@/domain/ledger";
 import { debtsForUser, houseSquareUp } from "@/domain/settleup";
+import { openSwaps, type SwapView } from "@/domain/swaps";
 import { listNudges, teamOnDuty } from "@/domain/teams";
 import { DONE_OPENS_MS } from "@/domain/turns";
 import { houseTurns, type TurnView } from "@/domain/views";
@@ -98,6 +102,14 @@ function describe(item: ActivityItem, meId: string): { text: string; cents?: num
       return {
         text: `${item.data.name} at ${formatCents(Number(item.data.worthCents))} ${item.data.outcome === "lapsed" ? "lapsed without enough votes" : "was turned down"}`,
       };
+    case "swap_requested":
+      return { text: `${who} asked ${item.data.toName} to take ${chore}` };
+    case "swap_accepted":
+      return {
+        text: item.data.backChoreName
+          ? `${who} swapped with ${item.data.fromName}: ${chore} for ${item.data.backChoreName}`
+          : `${who} took ${chore} for ${item.data.fromName}`,
+      };
     case "proof_sent":
       return { text: `${who} sent photos for ${chore}` };
     case "proof_rejected":
@@ -164,6 +176,80 @@ function openReason(turn: TurnView, meId: string): string {
   return mine ? "You missed this." : `${turn.assigneeName} missed it.`;
 }
 
+/** "Ask someone to take it" on one of your own turns, or the request you have already sent. */
+function SwapControls({
+  turn,
+  asked,
+  housemates,
+  theirTurns,
+  now,
+  tz,
+}: {
+  turn: TurnView;
+  asked: SwapView | undefined;
+  housemates: { memberId: string; name: string }[];
+  theirTurns: TurnView[];
+  now: Date;
+  tz: string;
+}) {
+  if (asked) {
+    return (
+      <div className="swap-asked">
+        <p className="small muted">
+          You asked {asked.toName} to take it
+          {asked.giveBack ? ` for your doing their ${asked.giveBack.choreName}` : ""}. It stays yours until
+          they accept.
+        </p>
+        <form action={swapCancelAction}>
+          <input type="hidden" name="requestId" value={asked.id} />
+          <SubmitButton className="btn-quiet">Cancel the request</SubmitButton>
+        </form>
+      </div>
+    );
+  }
+  return (
+    <details className="editor swap">
+      <summary>
+        <span>Ask someone to take it</span>
+      </summary>
+      <div className="body">
+        <form action={swapRequestAction}>
+          <input type="hidden" name="turnId" value={turn.id} />
+          <div className="field">
+            <label htmlFor={`swap-to-${turn.id}`}>Who</label>
+            <select id={`swap-to-${turn.id}`} name="toMemberId" className="input" required>
+              {housemates.map((m) => (
+                <option key={m.memberId} value={m.memberId}>
+                  {m.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          {theirTurns.length > 0 && (
+            <div className="field">
+              <label htmlFor={`swap-back-${turn.id}`}>In exchange, you do</label>
+              <select id={`swap-back-${turn.id}`} name="giveBackTurnId" className="input" defaultValue="">
+                <option value="">Nothing: ask it as a favour</option>
+                {theirTurns.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.assigneeName}'s {t.choreName}, {dueLabel(t.dueAt, now, tz)}
+                  </option>
+                ))}
+              </select>
+              <span className="hint">
+                Pick one of the chosen person's turns. It swaps only if they accept.
+              </span>
+            </div>
+          )}
+          <SubmitButton className="btn btn-block" pendingLabel="Asking…">
+            Ask
+          </SubmitButton>
+        </form>
+      </div>
+    </details>
+  );
+}
+
 /** True when this open chore expired on the viewer (or their team), so they cannot claim it. */
 function expiredOnMe(turn: TurnView, member: { id: string; teamId: string | null }): boolean {
   return turn.teamId ? turn.teamId === member.teamId : turn.assigneeMemberId === member.id;
@@ -226,10 +312,11 @@ export default async function HousePage({ searchParams }: Props) {
     etransfer ? debtsForUser(db, user.id) : Promise.resolve([]),
     etransfer ? houseSquareUp(db, house.id) : Promise.resolve({ lines: [], unclaimedCents: 0 }),
   ]);
-  const [duty, nudges, proposals] = await Promise.all([
+  const [duty, nudges, proposals, swaps] = await Promise.all([
     teamOnDuty(db, house.id, now),
     listNudges(db, house.id),
     openProposals(db, house.id),
+    openSwaps(db, house.id),
   ]);
   // The viewer's own payments first: what they pay, what they get, then everyone else's.
   const involvesMe = (l: { fromMemberId: string; toMemberId: string }) =>
@@ -257,6 +344,13 @@ export default async function HousePage({ searchParams }: Props) {
   // Proof waiting on the house, by turn: a turn with proof in is not waiting on anyone to do it.
   const proofFor = new Map(pending.map((p) => [p.turnId, p]));
   const toVoteOn = pending.filter((p) => p.memberId !== member.id);
+  const swapAsked = new Map(swaps.filter((s) => s.fromMemberId === member.id).map((s) => [s.turnId, s]));
+  const swapsForMe = swaps.filter((s) => s.toMemberId === member.id);
+  const housemates = balances.filter((b) => b.memberId !== member.id && b.status === "active");
+  // One-person turns others have waiting, which can be offered in exchange for a swap.
+  const theirTurns = turns.filter(
+    (t) => t.status === "assigned" && !t.teamId && t.assigneeMemberId !== member.id && !proofFor.has(t.id),
+  );
   const inviteUrl = `${await baseUrl()}/join/${house.inviteCode}`;
 
   return (
@@ -428,6 +522,16 @@ export default async function HousePage({ searchParams }: Props) {
                     </p>
                   </div>
                 )}
+                {!turn.teamId && !proofFor.has(turn.id) && housemates.length > 0 && (
+                  <SwapControls
+                    turn={turn}
+                    asked={swapAsked.get(turn.id)}
+                    housemates={housemates}
+                    theirTurns={theirTurns}
+                    now={now}
+                    tz={house.tz}
+                  />
+                )}
               </article>
             ))
           )}
@@ -500,6 +604,39 @@ export default async function HousePage({ searchParams }: Props) {
                   </div>
                 )
               )}
+            </article>
+          ))}
+        </section>
+      )}
+
+      {isActive && swapsForMe.length > 0 && (
+        <section className="section">
+          <h2 className="label">Asked to swap</h2>
+          {swapsForMe.map((s) => (
+            <article key={s.id} className="turn">
+              <div className="turn-head">
+                <h3>{s.choreName}</h3>
+              </div>
+              <p className="meta">
+                {s.fromName} asks you to take {s.choreName}, due{" "}
+                {midSentence(dueLabel(s.dueAt, now, house.tz))}.
+                {s.giveBack
+                  ? ` In exchange, ${s.fromName} does your ${s.giveBack.choreName}, due ${midSentence(dueLabel(s.giveBack.dueAt, now, house.tz))}.`
+                  : " Nothing in exchange: it is a favour."}{" "}
+                If you accept, it is yours, and if it expires it costs you.
+              </p>
+              <div className="actions">
+                <form action={swapAnswerAction}>
+                  <input type="hidden" name="requestId" value={s.id} />
+                  <input type="hidden" name="accept" value="yes" />
+                  <SubmitButton className="btn btn-primary">Accept</SubmitButton>
+                </form>
+                <form action={swapAnswerAction}>
+                  <input type="hidden" name="requestId" value={s.id} />
+                  <input type="hidden" name="accept" value="no" />
+                  <SubmitButton>Decline</SubmitButton>
+                </form>
+              </div>
             </article>
           ))}
         </section>
