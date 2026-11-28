@@ -24,11 +24,11 @@ import {
   textNewDebts,
 } from "@/domain/settleup";
 import { runTick } from "@/domain/tick";
-import { claimBounty, missTurn } from "@/domain/turns";
+import { missTurn } from "@/domain/turns";
 import { fakePayments } from "@/providers/payments";
 import { fakeSms } from "@/providers/sms";
 import { diskStorage } from "@/providers/storage";
-import { db, expireTurn, makeHouse, makeUser, resetDb, type TestHouse } from "./helpers";
+import { claimBounty, db, expireTurn, makeHouse, makeUser, resetDb, type TestHouse } from "./helpers";
 
 const NOW = new Date("2026-11-11T17:00:00Z"); // Wed noon Toronto; garbage is due Thu 21:00
 const LATE = new Date("2026-11-13T02:00:01Z"); // one second past the deadline

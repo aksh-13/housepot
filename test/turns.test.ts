@@ -5,9 +5,9 @@ import { beforeEach, expect, test } from "vitest";
 import { createChore, ensureTurns } from "@/domain/chores";
 import { choreBounty, memberBalance, transfer } from "@/domain/ledger";
 import { loadPhoto, savePhoto } from "@/domain/photos";
-import { claimBounty, markDone, missTurn } from "@/domain/turns";
+import { missTurn } from "@/domain/turns";
 import { diskStorage } from "@/providers/storage";
-import { db, makeHouse, resetDb, type TestHouse } from "./helpers";
+import { claimBounty, db, makeHouse, markDone, resetDb, type TestHouse } from "./helpers";
 
 const NOW = new Date("2026-11-11T17:00:00Z"); // Wed noon Toronto; garbage is due Thu 21:00
 const LATE = new Date("2026-11-13T02:00:01Z"); // one second past the deadline
@@ -151,12 +151,13 @@ test("a turn cannot be missed before its deadline, and is charged once however o
   expect(await memberBalance(db, a)).toBe(1500);
 });
 
-test("doing your own missed chore late gets your money back", async () => {
+test("you cannot claim back a chore that expired on you: being late costs its worth", async () => {
   const turn = await waitingTurn();
   await missTurn(db, { turnId: turn.id, now: LATE });
   const r = await claimBounty(db, { turnId: turn.id, memberId: a, photoId: await photo(a), now: LATE });
-  expect(r).toEqual({ ok: true, payoutCents: 500 });
-  expect(await balances()).toEqual([2000, 2000, 2000]);
+  expect(r).toEqual({ ok: false, error: "This expired on you, so the money goes to whoever else does it." });
+  expect(await balances()).toEqual([1500, 2000, 2000]);
+  expect(await choreBounty(db, choreId)).toBe(500);
 });
 
 test("a housemate who does the missed chore is paid the bounty", async () => {
@@ -218,7 +219,9 @@ test("two housemates claiming at the same moment: exactly one is paid", async ()
     claimBounty(db, { turnId: turn.id, memberId: c, photoId: pc, now: LATE }),
   ]);
   expect(results.filter((r) => r.ok)).toHaveLength(1);
-  expect(results.find((r) => !r.ok)).toEqual({ ok: false, error: "This chore is not open to claim." });
+  // The loser either finds the first proof still being voted on, or the chore already claimed.
+  const loser = results.find((r) => !r.ok);
+  expect(loser?.ok === false && loser.error).toMatch(/already sent proof|not open to claim/);
   const [, balB, balC] = await balances();
   expect(balB + balC).toBe(4500);
   expect(await choreBounty(db, choreId)).toBe(0);

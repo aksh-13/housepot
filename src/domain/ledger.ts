@@ -93,6 +93,20 @@ export async function choreBounty(db: Db, choreId: string): Promise<number> {
   return rows[0].total;
 }
 
+/**
+ * Chore money not already set aside for a claim the house is voting on. That set-aside money is
+ * still on the chore in the ledger, but it is promised to whoever sent the claim if it is approved.
+ */
+export async function availableBounty(db: Db, choreId: string): Promise<number> {
+  const reserved = await db.query<{ cents: number }>(
+    `select coalesce(sum(s.reserved_cents), 0)::int as cents
+     from submissions s join turns tn on tn.id = s.turn_id
+     where tn.chore_id = $1 and s.status = 'pending' and s.kind = 'claim'`,
+    [choreId],
+  );
+  return Math.max(0, (await choreBounty(db, choreId)) - reserved.rows[0].cents);
+}
+
 export type MemberBalance = { memberId: string; name: string; status: string; balanceCents: number };
 
 /** Everyone still in the house, in rotation order. */

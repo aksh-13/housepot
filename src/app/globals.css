@@ -899,3 +899,19 @@ form > .receipt {
 .pay-steps {
   margin-top: var(--space-3);
 }
+
+/* Proof photos waiting on the house's vote. */
+.proof-photos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+.proof-photos .thumb {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+}
+.proof-status {
+  margin-top: var(--space-3);
+}

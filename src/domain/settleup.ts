@@ -6,7 +6,7 @@ import { inboundMode } from "@/settings";
 import { nextMonthStart } from "@/time";
 import { logActivity } from "./activity";
 import { activeMembers, getHouse } from "./houses";
-import { choreBounty, transfer } from "./ledger";
+import { availableBounty, transfer } from "./ledger";
 
 /**
  * Settling up in an e-Transfer house. No money is held by the app: balances are a scoreboard. Once a
@@ -186,7 +186,8 @@ export async function shareOutBounties(t: Db, houseId: string, choreIds: string[
   const active = await activeMembers(t, houseId);
   if (active.length === 0) return;
   for (const choreId of choreIds) {
-    const bounty = await choreBounty(t, choreId);
+    // Money set aside for a claim the house is still voting on stays on the chore for that claim.
+    const bounty = await availableBounty(t, choreId);
     if (bounty <= 0) continue;
     const share = Math.floor(bounty / active.length);
     const oddCents = bounty - share * active.length;
@@ -225,7 +226,11 @@ export async function settleUpHouse(
       "select id from chores where house_id = $1 order by id for update",
       [a.houseId],
     );
-    await t.query("update turns set status = 'rolled' where house_id = $1 and status = 'open'", [a.houseId]);
+    await t.query(
+      `update turns set status = 'rolled' where house_id = $1 and status = 'open'
+         and not exists (select 1 from submissions s where s.turn_id = turns.id and s.status = 'pending')`,
+      [a.houseId],
+    );
     await shareOutBounties(
       t,
       a.houseId,

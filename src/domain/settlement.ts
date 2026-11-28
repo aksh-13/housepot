@@ -2,9 +2,9 @@ import type { Db } from "@/db";
 import type { Payments } from "@/providers/payments";
 import { nextTermEnd } from "@/time";
 import { logActivity } from "./activity";
-import { DISPUTE_WINDOW_MS } from "./disputes";
+import { hasPendingProof } from "./approvals";
 import { activeMembers, getHouse, memberById } from "./houses";
-import { choreBounty, memberBalance, transfer } from "./ledger";
+import { availableBounty, memberBalance, transfer } from "./ledger";
 import { type CreatedDebt, settleUpHouse } from "./settleup";
 import { expireWaitingTurnsOf } from "./turns";
 
@@ -140,7 +140,7 @@ type LeaveResult = { ok: true; debts?: CreatedDebt[] } | { ok: false; error: str
 /**
  * Cashes the member out and removes them from the house and its rotation.
  * Leaving is not a way out of a charge: a turn that is waiting on them counts as expired, and they
- * cannot leave while a chore they just finished can still be disputed.
+ * cannot leave while the house is still voting on proof they sent.
  */
 export async function leaveHouse(
   db: Db,
@@ -149,16 +149,10 @@ export async function leaveHouse(
 ): Promise<LeaveResult> {
   const member = await memberById(db, a.memberId);
   if (!member || member.status === "left") return { ok: true };
-  const recent = await db.query(
-    `select 1 from turns where completed_by_member_id = $1 and status in ('done', 'claimed')
-       and completed_at > $2 limit 1`,
-    [a.memberId, new Date(a.now.getTime() - DISPUTE_WINDOW_MS)],
-  );
-  if (recent.rows.length > 0) {
+  if (await hasPendingProof(db, a.memberId)) {
     return {
       ok: false,
-      error:
-        "You finished a chore in the last 24 hours. You can leave once the 24 hours to dispute it have passed.",
+      error: "The house is still voting on a chore you sent proof for. You can leave once it is decided.",
     };
   }
   const house = await getHouse(db, member.houseId);
@@ -211,18 +205,19 @@ export async function settleHouse(
 
     // Then close every turn. Anyone finishing or claiming one at this moment either got in before
     // these updates (and their money has already moved) or sees a closed turn afterwards.
-    await t.query("update turns set status = 'rolled' where house_id = $1 and status = 'open'", [a.houseId]);
+    await t.query(
+      `update turns set status = 'rolled' where house_id = $1 and status = 'open'
+         and not exists (select 1 from submissions s where s.turn_id = turns.id and s.status = 'pending')`,
+      [a.houseId],
+    );
     await t.query("update turns set status = 'cancelled' where house_id = $1 and status = 'assigned'", [
-      a.houseId,
-    ]);
-    await t.query("update disputes set status = 'expired' where house_id = $1 and status = 'open'", [
       a.houseId,
     ]);
 
     const active = await activeMembers(t, a.houseId);
     if (active.length > 0) {
       for (const chore of chores.rows) {
-        const bounty = await choreBounty(t, chore.id);
+        const bounty = await availableBounty(t, chore.id);
         if (bounty <= 0) continue;
         const share = Math.floor(bounty / active.length);
         const oddCents = bounty - share * active.length;

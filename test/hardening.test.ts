@@ -4,20 +4,20 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, expect, test } from "vitest";
 import { POST as webhook } from "@/app/api/webhooks/payments/route";
+import { submitClaim, submitDone, voteOnSubmission } from "@/domain/approvals";
 import { requestCode } from "@/domain/auth";
 import { createChore, ensureTurns, updateChore } from "@/domain/chores";
-import { raiseDispute, voteDispute } from "@/domain/disputes";
 import { joinHouse, setPaused } from "@/domain/houses";
 import { choreBounty, memberBalance, transfer } from "@/domain/ledger";
 import { amountDue } from "@/domain/payments";
 import { savePhoto } from "@/domain/photos";
 import { cashOutMember, leaveHouse, pendingManualPayouts, settleHouse } from "@/domain/settlement";
-import { claimBounty, markDone, missTurn } from "@/domain/turns";
+import { missTurn } from "@/domain/turns";
 import { getProviders } from "@/providers";
 import { fakePayments } from "@/providers/payments";
 import { fakeSms } from "@/providers/sms";
 import { diskStorage } from "@/providers/storage";
-import { db, makeHouse, resetDb, type TestHouse } from "./helpers";
+import { claimBounty, db, makeHouse, markDone, resetDb, type TestHouse } from "./helpers";
 
 const NOW = new Date("2026-11-11T17:00:00Z"); // Wed noon Toronto; garbage due Thu 21:00
 const LATE = new Date("2026-11-13T02:00:01Z");
@@ -159,44 +159,73 @@ test("a refund that went out before a crash is recognised on retry, not sent aga
   expect(await memberBalance(db, ids[0])).toBe(0);
 });
 
-// ── Disputes ──────────────────────────────────────────────────────────────────
+// ── Approval votes ────────────────────────────────────────────────────────────
 
-test("a chore claimed again after a successful dispute can be disputed again", async () => {
+test("a claim the house rejects leaves the chore open, and it can be claimed again", async () => {
   const { house, ids } = await houseWithGarbage(3);
   const turnId = await waitingTurnId(house.houseId);
   await missTurn(db, { turnId, now: LATE });
-  await claimBounty(db, { turnId, memberId: ids[1], photoId: await photo(house, ids[1]), now: LATE });
-  const first = await raiseDispute(db, { turnId, memberId: ids[0], now: after(LATE, 1) });
-  if (!first.ok) throw new Error(first.error);
-  await voteDispute(db, { disputeId: first.disputeId, memberId: ids[2], agree: true, now: after(LATE, 2) });
-
-  await claimBounty(db, {
+  const first = await submitClaim(db, {
     turnId,
     memberId: ids[1],
-    photoId: await photo(house, ids[1]),
-    now: after(LATE, 3),
+    photoIds: [await photo(house, ids[1])],
+    now: LATE,
   });
-  const second = await raiseDispute(db, { turnId, memberId: ids[0], now: after(LATE, 4) });
+  if (!first.ok) throw new Error(first.error);
+  for (const voter of [ids[0], ids[2]]) {
+    await voteOnSubmission(db, {
+      submissionId: first.submissionId,
+      memberId: voter,
+      approve: false,
+      now: after(LATE, 1),
+    });
+  }
+  expect((await db.query("select status from turns where id = $1", [turnId])).rows[0].status).toBe("open");
 
-  expect(second.ok).toBe(true);
+  const again = await claimBounty(db, {
+    turnId,
+    memberId: ids[2],
+    photoId: await photo(house, ids[2]),
+    now: after(LATE, 2),
+  });
+  expect(again).toEqual({ ok: true, payoutCents: 500 });
 });
 
 // ── Leaving must not be a way out of a charge ─────────────────────────────────
 
-test("you cannot leave within 24 hours of finishing a chore, while it can still be disputed", async () => {
+test("you cannot leave while the house is still voting on proof you sent", async () => {
   const { house, ids } = await houseWithGarbage(3);
   const payments = fakePayments();
   const turnId = await waitingTurnId(house.houseId);
-  await markDone(db, { turnId, memberId: ids[0], photoId: await photo(house, ids[0]), now: NOW });
+  const sent = await submitDone(db, {
+    turnId,
+    memberId: ids[0],
+    photoIds: [await photo(house, ids[0])],
+    now: NOW,
+  });
+  if (!sent.ok) throw new Error(sent.error);
 
   const tooSoon = await leaveHouse(db, payments, { memberId: ids[0], now: after(NOW, 1) });
-  expect(tooSoon.ok).toBe(false);
-  if (!tooSoon.ok) expect(tooSoon.error).toMatch(/24 hours/);
+  expect(tooSoon).toEqual({
+    ok: false,
+    error: "The house is still voting on a chore you sent proof for. You can leave once it is decided.",
+  });
   expect(await memberBalance(db, ids[0])).toBe(2000);
 
-  // Their next turn would be waiting by now; take it out of the picture for this check.
+  await voteOnSubmission(db, {
+    submissionId: sent.submissionId,
+    memberId: ids[1],
+    approve: true,
+    now: after(NOW, 2),
+  });
+  await voteOnSubmission(db, {
+    submissionId: sent.submissionId,
+    memberId: ids[2],
+    approve: true,
+    now: after(NOW, 2),
+  });
   await db.query("update turns set status = 'cancelled' where status = 'assigned'");
-  expect((await leaveHouse(db, payments, { memberId: ids[0], now: after(NOW, 25) })).ok).toBe(true);
+  expect((await leaveHouse(db, payments, { memberId: ids[0], now: after(NOW, 3) })).ok).toBe(true);
 });
 
 test("leaving while it is your turn counts as letting it expire", async () => {

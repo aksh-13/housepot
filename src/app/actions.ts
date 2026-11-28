@@ -2,10 +2,10 @@
 
 import { notFound, redirect } from "next/navigation";
 import { getDb } from "@/db";
+import { type Decision, MAX_PHOTOS, submitClaim, submitDone, voteOnSubmission } from "@/domain/approvals";
 import { endSession, normalizePhone, requestCode, setUserName, verifyCode } from "@/domain/auth";
 import { billInputFromForm, createBill, deleteBill, editBill } from "@/domain/bills";
 import { createChore, ensureTurns, updateChore } from "@/domain/chores";
-import { raiseDispute, voteDispute } from "@/domain/disputes";
 import { fakeReceivedEmail, fakeRequestEmail } from "@/domain/fakeInterac";
 import {
   createHouse,
@@ -32,7 +32,7 @@ import {
   textNewDebts,
 } from "@/domain/settleup";
 import { addNudge, addTeam, removeNudge, removeTeam, saveTeams, sendNudge } from "@/domain/teams";
-import { assignTurn, claimBounty, markDone } from "@/domain/turns";
+import { assignTurn } from "@/domain/turns";
 import {
   baseUrl,
   clearSessionCookie,
@@ -175,98 +175,105 @@ export async function fakePayAction(fd: FormData): Promise<void> {
 
 // ── Turns ─────────────────────────────────────────────────────────────────────
 
-async function photoFrom(fd: FormData, houseId: string, memberId: string) {
-  const file = fd.get("photo");
-  if (!(file instanceof File) || file.size === 0) {
-    return { ok: false as const, error: "Add a photo of the finished chore." };
+/** Saves the one to four proof photos sent with the form. */
+async function photosFrom(
+  fd: FormData,
+  houseId: string,
+  memberId: string,
+): Promise<{ ok: true; photoIds: string[] } | { ok: false; error: string }> {
+  const files = fd.getAll("photo").filter((f): f is File => f instanceof File && f.size > 0);
+  if (files.length === 0) return { ok: false, error: "Add a photo of the finished chore." };
+  if (files.length > MAX_PHOTOS) return { ok: false, error: `Send up to ${MAX_PHOTOS} photos.` };
+  const photoIds: string[] = [];
+  for (const file of files) {
+    const saved = await savePhoto(getDb(), getProviders().storage, {
+      houseId,
+      memberId,
+      bytes: Buffer.from(await file.arrayBuffer()),
+      contentType: file.type,
+      now: new Date(),
+    });
+    if (!saved.ok) return saved;
+    photoIds.push(saved.photoId);
   }
-  return savePhoto(getDb(), getProviders().storage, {
-    houseId,
-    memberId,
-    bytes: Buffer.from(await file.arrayBuffer()),
-    contentType: file.type,
-    now: new Date(),
-  });
+  return { ok: true, photoIds };
+}
+
+/** Tells whoever sent proof how the house decided. Nothing is sent while the vote is still open. */
+async function textDecision(memberId: string, choreName: string, decision: Decision, payoutCents: number) {
+  if (decision === "pending") return;
+  const db = getDb();
+  const member = await memberById(db, memberId);
+  if (!member) return;
+  const link = `${await baseUrl()}/house`;
+  const body =
+    decision === "approved"
+      ? `The house approved ${choreName}.${payoutCents > 0 ? ` +${formatCents(payoutCents)} to you.` : ""} ${link}`
+      : `The house said ${choreName} was not done. Your balance is now ${formatCents(await memberBalance(db, memberId))}. ${link}`;
+  await getProviders()
+    .sms.send(member.contact, body)
+    .catch((err) => console.error("Decision text failed:", err));
+}
+
+function sentNotice(decision: Decision, payoutCents: number): string {
+  if (decision === "approved") {
+    return payoutCents > 0 ? `Done. ${formatCents(payoutCents)} is yours.` : "Done. Nice one.";
+  }
+  return "Sent. It counts once most of the house says it looks done, or after 48 hours if nobody objects.";
 }
 
 export async function doneAction(fd: FormData): Promise<void> {
   const { member, house } = await requireMember();
-  const photo = await photoFrom(fd, house.id, member.id);
-  if (!photo.ok) back("/house", "error", photo.error);
+  const photos = await photosFrom(fd, house.id, member.id);
+  if (!photos.ok) back("/house", "error", photos.error);
   const now = new Date();
-  const done = await markDone(getDb(), {
+  const sent = await submitDone(getDb(), {
     turnId: str(fd, "turnId"),
     memberId: member.id,
-    photoId: photo.photoId,
+    photoIds: photos.photoIds,
     now,
   });
-  if (!done.ok) back("/house", "error", done.error);
-  await ensureTurns(getDb(), house.id, now);
-  back(
-    "/house",
-    "notice",
-    done.payoutCents
-      ? `Done. You collected ${formatCents(done.payoutCents)} left on the chore.`
-      : "Done. Nice one.",
-  );
+  if (!sent.ok) back("/house", "error", sent.error);
+  if (sent.decision === "approved") await ensureTurns(getDb(), house.id, now);
+  back("/house", "notice", sentNotice(sent.decision, sent.payoutCents));
 }
 
 export async function claimAction(fd: FormData): Promise<void> {
   const { member, house } = await requireMember();
-  const photo = await photoFrom(fd, house.id, member.id);
-  if (!photo.ok) back("/house", "error", photo.error);
-  const claimed = await claimBounty(getDb(), {
+  const photos = await photosFrom(fd, house.id, member.id);
+  if (!photos.ok) back("/house", "error", photos.error);
+  const sent = await submitClaim(getDb(), {
     turnId: str(fd, "turnId"),
     memberId: member.id,
-    photoId: photo.photoId,
+    photoIds: photos.photoIds,
     now: new Date(),
   });
-  if (!claimed.ok) back("/house", "error", claimed.error);
-  back("/house", "notice", `Claimed. ${formatCents(claimed.payoutCents ?? 0)} is yours.`);
+  if (!sent.ok) back("/house", "error", sent.error);
+  back("/house", "notice", sentNotice(sent.decision, sent.payoutCents));
 }
 
-// ── Disputes ──────────────────────────────────────────────────────────────────
-
-async function textDisputePassed(accusedMemberId: string, choreName: string): Promise<void> {
-  const db = getDb();
-  const accused = await memberById(db, accusedMemberId);
-  if (!accused) return;
-  const balance = formatCents(await memberBalance(db, accusedMemberId));
-  await getProviders()
-    .sms.send(
-      accused.contact,
-      `The house voted that ${choreName} was not done. Your balance is now ${balance}. ${await baseUrl()}/house`,
-    )
-    .catch((err) => console.error("Dispute text failed:", err));
-}
-
-export async function disputeAction(fd: FormData): Promise<void> {
-  const { member } = await requireMember();
-  const raised = await raiseDispute(getDb(), {
-    turnId: str(fd, "turnId"),
+/** "Looks done" or "Not done" on someone else's proof. */
+export async function approvalVoteAction(fd: FormData): Promise<void> {
+  const { member, house } = await requireMember();
+  const now = new Date();
+  const voted = await voteOnSubmission(getDb(), {
+    submissionId: str(fd, "submissionId"),
     memberId: member.id,
-    now: new Date(),
+    approve: str(fd, "approve") === "yes",
+    now,
   });
-  if (!raised.ok) back("/house", "error", raised.error);
-  if (raised.passed) await textDisputePassed(raised.accusedMemberId, raised.choreName);
+  if (!voted.ok) back("/house", "error", voted.error);
+  await textDecision(voted.submitterMemberId, voted.choreName, voted.decision, voted.payoutCents);
+  if (voted.decision !== "pending") await ensureTurns(getDb(), house.id, now);
   back(
     "/house",
     "notice",
-    raised.passed ? "Dispute upheld. The chore is open again." : "Dispute raised. Your housemates can vote.",
+    voted.decision === "approved"
+      ? `That makes a majority: ${voted.choreName} counts.`
+      : voted.decision === "rejected"
+        ? `That makes a majority: ${voted.choreName} does not count.`
+        : "Vote counted.",
   );
-}
-
-export async function voteAction(fd: FormData): Promise<void> {
-  const { member } = await requireMember();
-  const voted = await voteDispute(getDb(), {
-    disputeId: str(fd, "disputeId"),
-    memberId: member.id,
-    agree: str(fd, "agree") === "yes",
-    now: new Date(),
-  });
-  if (!voted.ok) back("/house", "error", voted.error);
-  if (voted.passed) await textDisputePassed(voted.accusedMemberId, voted.choreName);
-  back("/house", "notice", voted.passed ? "Dispute upheld. The chore is open again." : "Vote counted.");
 }
 
 // ── Chores ────────────────────────────────────────────────────────────────────

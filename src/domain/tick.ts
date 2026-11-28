@@ -5,6 +5,7 @@ import type { Payments } from "@/providers/payments";
 import type { Sms } from "@/providers/sms";
 import { localDate } from "@/time";
 import { logActivity } from "./activity";
+import { closeTimedOutSubmissions } from "./approvals";
 import { ensureTurns } from "./chores";
 import { activeMembers, HOUSE_COLUMNS, type House, type Member } from "./houses";
 import { choreBounty, memberBalance } from "./ledger";
@@ -29,6 +30,8 @@ export type TickSummary = {
   /** e-Transfer houses: debts created by settle-ups, and payment reminders sent. */
   debtsCreated: number;
   debtReminders: number;
+  /** Proof that waited 48 hours with no majority either way, so it counted. */
+  approvalsClosed: number;
   errors: number;
   /** Another tick was already running, so this one did nothing. */
   skippedLocked?: true;
@@ -56,7 +59,9 @@ async function chargeMisses(ctx: Ctx, house: House, members: Member[]): Promise<
   }>(
     `select t.id, t.chore_id, t.assignee_member_id, t.team_id, c.name
      from turns t join chores c on c.id = t.chore_id
-     where t.house_id = $1 and t.status = 'assigned' and t.due_at < $2 order by t.due_at`,
+     where t.house_id = $1 and t.status = 'assigned' and t.due_at < $2
+       and not exists (select 1 from submissions s where s.turn_id = t.id and s.status = 'pending')
+     order by t.due_at`,
     [house.id, ctx.now],
   );
   for (const turn of overdue.rows) {
@@ -70,14 +75,14 @@ async function chargeMisses(ctx: Ctx, house: House, members: Member[]): Promise<
         await send(
           ctx,
           m.contact,
-          `Your team missed ${turn.name}. The ${bounty} was split between everyone on the team, and your balance is now ${balance}. Do it before a housemate does to win it back: ${ctx.link}`,
+          `Your team missed ${turn.name}. The ${bounty} was split between everyone on the team, and your balance is now ${balance}. It is open to the house now: whoever does it takes it. ${ctx.link}`,
         );
       } else if (!turn.team_id && m.id === turn.assignee_member_id) {
         const balance = formatCents(await memberBalance(ctx.db, m.id));
         await send(
           ctx,
           m.contact,
-          `You missed ${turn.name}. ${bounty} moved out of your balance (now ${balance}). Do it before a housemate does to win it back: ${ctx.link}`,
+          `You missed ${turn.name}. ${bounty} moved out of your balance (now ${balance}). It is open to the house now: whoever does it takes it. ${ctx.link}`,
         );
       } else {
         await send(
@@ -102,7 +107,8 @@ async function sendReminders(ctx: Ctx, house: House, members: Member[]): Promise
   }>(
     `select t.id, t.assignee_member_id, t.team_id, t.due_at, c.name, t.reminded_morning_at, t.reminded_final_at
      from turns t join chores c on c.id = t.chore_id
-     where t.house_id = $1 and t.status = 'assigned' and t.due_at >= $2`,
+     where t.house_id = $1 and t.status = 'assigned' and t.due_at >= $2
+       and not exists (select 1 from submissions s where s.turn_id = t.id and s.status = 'pending')`,
     [house.id, ctx.now],
   );
   const nowLocal = DateTime.fromJSDate(ctx.now, { zone: house.tz });
@@ -257,6 +263,7 @@ async function tickEtransferHouse(ctx: Ctx, house: House): Promise<void> {
   // start only produces overdue debts. Payments someone has asked for are still chased below.
   await remindDebts(ctx, house);
   if (house.paused) return;
+  ctx.summary.approvalsClosed += await closeTimedOutSubmissions(ctx.db, house.id, ctx.now);
   await chargeMisses(ctx, house, await activeMembers(ctx.db, house.id));
   ctx.summary.turnsCreated += await ensureTurns(ctx.db, house.id, ctx.now);
   await sendReminders(ctx, house, await activeMembers(ctx.db, house.id));
@@ -271,6 +278,7 @@ async function tickHouse(ctx: Ctx, house: House): Promise<void> {
   }
   if (house.paused) return;
 
+  ctx.summary.approvalsClosed += await closeTimedOutSubmissions(ctx.db, house.id, ctx.now);
   await chargeMisses(ctx, house, await activeMembers(ctx.db, house.id));
   ctx.summary.turnsCreated += await ensureTurns(ctx.db, house.id, ctx.now);
   const members = await activeMembers(ctx.db, house.id);
@@ -294,6 +302,7 @@ export async function runTick(db: Db, p: Providers, now: Date, baseUrl: string):
     settled: 0,
     debtsCreated: 0,
     debtReminders: 0,
+    approvalsClosed: 0,
     errors: 0,
   };
   // The lock lives in its own transaction; the work below uses ordinary connections.

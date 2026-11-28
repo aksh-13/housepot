@@ -17,12 +17,12 @@ import {
   teamOnDuty,
 } from "@/domain/teams";
 import { runTick } from "@/domain/tick";
-import { assignTurn, claimBounty, expireWaitingTurnsOf, markDone, missTurn } from "@/domain/turns";
+import { assignTurn, expireWaitingTurnsOf, missTurn } from "@/domain/turns";
 import { houseTurns } from "@/domain/views";
 import { fakePayments } from "@/providers/payments";
 import { fakeSms } from "@/providers/sms";
 import { diskStorage } from "@/providers/storage";
-import { db, makeHouse, resetDb, type TestHouse } from "./helpers";
+import { claimBounty, db, makeHouse, markDone, resetDb, type TestHouse } from "./helpers";
 
 const NOW = new Date("2026-11-11T17:00:00Z"); // Wed noon Toronto, inside Team A's first two weeks
 const LATE = new Date("2026-11-13T02:00:01Z"); // just past Thursday's 9pm deadline
@@ -351,7 +351,7 @@ describe("the scheduler and team chores", () => {
     const toAna = sent.filter((m) => m.to_phone === house.members[0].phone).map((m) => m.body);
     const toCy = sent.filter((m) => m.to_phone === house.members[2].phone).map((m) => m.body);
     expect(toAna).toEqual([
-      "Your team missed Garbage. The $5 was split between everyone on the team, and your balance is now -$2.50. Do it before a housemate does to win it back: https://housepot.test/house",
+      "Your team missed Garbage. The $5 was split between everyone on the team, and your balance is now -$2.50. It is open to the house now: whoever does it takes it. https://housepot.test/house",
     ]);
     expect(toCy).toEqual([
       "Garbage is open: +$5 to whoever does it, with a photo. https://housepot.test/house",
