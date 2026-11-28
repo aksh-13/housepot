@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, test } from "vitest";
 import { createBill } from "@/domain/bills";
-import { createChore, ensureTurns } from "@/domain/chores";
+import { ensureTurns } from "@/domain/chores";
 import { getHouse, joinHouse } from "@/domain/houses";
 import { choreBounty, memberBalance } from "@/domain/ledger";
 import { savePhoto } from "@/domain/photos";
@@ -28,7 +28,16 @@ import { missTurn } from "@/domain/turns";
 import { fakePayments } from "@/providers/payments";
 import { fakeSms } from "@/providers/sms";
 import { diskStorage } from "@/providers/storage";
-import { claimBounty, db, expireTurn, makeHouse, makeUser, resetDb, type TestHouse } from "./helpers";
+import {
+  addChore,
+  claimBounty,
+  db,
+  expireTurn,
+  makeHouse,
+  makeUser,
+  resetDb,
+  type TestHouse,
+} from "./helpers";
 
 const NOW = new Date("2026-11-11T17:00:00Z"); // Wed noon Toronto; garbage is due Thu 21:00
 const LATE = new Date("2026-11-13T02:00:01Z"); // one second past the deadline
@@ -49,7 +58,7 @@ beforeEach(async () => {
   await resetDb();
   house = await makeHouse(3, { moneyMode: "etransfer" });
   [a, b, c] = house.members.map((m) => m.memberId);
-  const chore = await createChore(db, {
+  const chore = await addChore(db, {
     houseId: house.houseId,
     memberId: a,
     name: "Garbage",

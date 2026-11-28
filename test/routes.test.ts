@@ -12,7 +12,7 @@ import { GET as photoRoute } from "@/app/api/photos/[id]/route";
 import { GET as readyz } from "@/app/api/readyz/route";
 import { POST as webhook } from "@/app/api/webhooks/payments/route";
 import { requestCode, verifyCode } from "@/domain/auth";
-import { createChore, ensureTurns } from "@/domain/chores";
+import { ensureTurns } from "@/domain/chores";
 import { activeMembers, createHouse } from "@/domain/houses";
 import { memberBalance } from "@/domain/ledger";
 import { savePhoto } from "@/domain/photos";
@@ -22,7 +22,7 @@ import { ago, dueLabel } from "@/lib/format";
 import { SESSION_COOKIE } from "@/lib/session";
 import { getProviders } from "@/providers";
 import { fakeSms } from "@/providers/sms";
-import { db, makeHouse, makeUser, resetDb } from "./helpers";
+import { addChore, db, makeHouse, makeUser, resetDb } from "./helpers";
 
 const NOW = new Date("2026-11-11T17:00:00Z");
 const LATE = new Date("2026-11-13T02:00:01Z");
@@ -63,7 +63,7 @@ test("the tick endpoint refuses callers without the secret", async () => {
 
 test("the tick endpoint runs a tick for callers with the secret", async () => {
   const house = await makeHouse(2);
-  await createChore(db, {
+  await addChore(db, {
     houseId: house.houseId,
     memberId: house.members[0].memberId,
     name: "Garbage",
@@ -188,7 +188,7 @@ test("a proof photo is served to housemates and to nobody else", async () => {
 test("houseTurns lists waiting and open turns with who, when and how much is on them", async () => {
   const house = await makeHouse(2);
   const [a, b] = house.members.map((m) => m.memberId);
-  const chore = await createChore(db, {
+  const chore = await addChore(db, {
     houseId: house.houseId,
     memberId: a,
     name: "Garbage",

@@ -6,7 +6,7 @@ import { beforeEach, expect, test } from "vitest";
 import { POST as webhook } from "@/app/api/webhooks/payments/route";
 import { submitClaim, submitDone, voteOnSubmission } from "@/domain/approvals";
 import { requestCode } from "@/domain/auth";
-import { createChore, ensureTurns, updateChore } from "@/domain/chores";
+import { ensureTurns, updateChore } from "@/domain/chores";
 import { joinHouse, setPaused } from "@/domain/houses";
 import { choreBounty, memberBalance, transfer } from "@/domain/ledger";
 import { amountDue } from "@/domain/payments";
@@ -17,7 +17,7 @@ import { getProviders } from "@/providers";
 import { fakePayments } from "@/providers/payments";
 import { fakeSms } from "@/providers/sms";
 import { diskStorage } from "@/providers/storage";
-import { claimBounty, db, makeHouse, markDone, resetDb, type TestHouse } from "./helpers";
+import { addChore, claimBounty, db, makeHouse, markDone, resetDb, type TestHouse } from "./helpers";
 
 const NOW = new Date("2026-11-11T17:00:00Z"); // Wed noon Toronto; garbage due Thu 21:00
 const LATE = new Date("2026-11-13T02:00:01Z");
@@ -30,7 +30,7 @@ beforeEach(resetDb);
 async function houseWithGarbage(size: number, opts?: { active?: number }) {
   const house = await makeHouse(size, opts);
   const ids = house.members.map((m) => m.memberId);
-  const chore = await createChore(db, {
+  const chore = await addChore(db, {
     houseId: house.houseId,
     memberId: ids[0],
     name: "Garbage",
@@ -275,7 +275,7 @@ test("someone who has not paid in cannot pause the house or add, edit or remove 
     false,
   );
 
-  const added = await createChore(db, {
+  const added = await addChore(db, {
     houseId: house.houseId,
     memberId: unpaid,
     name: "Dishes",

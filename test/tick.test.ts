@@ -2,7 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, expect, test } from "vitest";
-import { createChore, ensureTurns } from "@/domain/chores";
+import { ensureTurns } from "@/domain/chores";
 import { getHouse, setAutoReload, setPaused } from "@/domain/houses";
 import { choreBounty, memberBalance, transfer } from "@/domain/ledger";
 import { savePhoto } from "@/domain/photos";
@@ -10,7 +10,7 @@ import { runTick } from "@/domain/tick";
 import { type FakePayments, fakePayments } from "@/providers/payments";
 import { fakeSms } from "@/providers/sms";
 import { diskStorage } from "@/providers/storage";
-import { db, makeHouse, markDone, resetDb, type TestHouse } from "./helpers";
+import { addChore, db, makeHouse, markDone, resetDb, type TestHouse } from "./helpers";
 
 const BASE = "https://housepot.test";
 const WED_NOON = new Date("2026-11-11T17:00:00Z"); // garbage is due Thu 21:00 Toronto = Fri 02:00Z
@@ -33,7 +33,7 @@ beforeEach(async () => {
   payments = fakePayments();
   house = await makeHouse(3);
   ids = house.members.map((m) => m.memberId);
-  const chore = await createChore(db, {
+  const chore = await addChore(db, {
     houseId: house.houseId,
     memberId: ids[0],
     name: "Garbage",

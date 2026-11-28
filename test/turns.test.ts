@@ -2,12 +2,12 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, expect, test } from "vitest";
-import { createChore, ensureTurns } from "@/domain/chores";
+import { ensureTurns } from "@/domain/chores";
 import { choreBounty, memberBalance, transfer } from "@/domain/ledger";
 import { loadPhoto, savePhoto } from "@/domain/photos";
 import { missTurn } from "@/domain/turns";
 import { diskStorage } from "@/providers/storage";
-import { claimBounty, db, makeHouse, markDone, resetDb, type TestHouse } from "./helpers";
+import { addChore, claimBounty, db, makeHouse, markDone, resetDb, type TestHouse } from "./helpers";
 
 const NOW = new Date("2026-11-11T17:00:00Z"); // Wed noon Toronto; garbage is due Thu 21:00
 const LATE = new Date("2026-11-13T02:00:01Z"); // one second past the deadline
@@ -25,7 +25,7 @@ beforeEach(async () => {
   await resetDb();
   house = await makeHouse(3);
   [a, b, c] = house.members.map((m) => m.memberId);
-  const chore = await createChore(db, {
+  const chore = await addChore(db, {
     houseId: house.houseId,
     memberId: a,
     name: "Garbage",

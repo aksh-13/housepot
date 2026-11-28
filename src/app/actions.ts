@@ -33,6 +33,7 @@ import {
 } from "@/domain/settleup";
 import { addNudge, addTeam, removeNudge, removeTeam, saveTeams, sendNudge } from "@/domain/teams";
 import { assignTurn } from "@/domain/turns";
+import { voteOnProposal } from "@/domain/worth";
 import {
   baseUrl,
   clearSessionCookie,
@@ -301,7 +302,13 @@ export async function addChoreAction(fd: FormData): Promise<void> {
   });
   if (!created.ok) back("/house/chores", "error", created.error);
   await ensureTurns(getDb(), house.id, now);
-  back("/house/chores", "notice", "Chore added.");
+  back(
+    "/house/chores",
+    "notice",
+    created.proposed
+      ? "Proposed. It starts once most of the house agrees to it and what it is worth."
+      : "Chore added.",
+  );
 }
 
 export async function updateChoreAction(fd: FormData): Promise<void> {
@@ -320,7 +327,13 @@ export async function updateChoreAction(fd: FormData): Promise<void> {
   });
   if (!updated.ok) back("/house/chores", "error", updated.error);
   await ensureTurns(getDb(), house.id, now);
-  back("/house/chores", "notice", "Chore saved.");
+  back(
+    "/house/chores",
+    "notice",
+    updated.proposed
+      ? "Saved. The new worth is proposed, and applies once most of the house agrees."
+      : "Chore saved.",
+  );
 }
 
 export async function archiveChoreAction(fd: FormData): Promise<void> {
@@ -333,6 +346,29 @@ export async function archiveChoreAction(fd: FormData): Promise<void> {
   });
   if (!archived.ok) back("/house/chores", "error", archived.error);
   back("/house/chores", "notice", "Chore removed.");
+}
+
+/** Agree or disagree with a proposed chore or a proposed new worth. */
+export async function worthVoteAction(fd: FormData): Promise<void> {
+  const { member, house } = await requireMember();
+  const now = new Date();
+  const voted = await voteOnProposal(getDb(), {
+    proposalId: str(fd, "proposalId"),
+    memberId: member.id,
+    agree: str(fd, "agree") === "yes",
+    now,
+  });
+  if (!voted.ok) back("/house", "error", voted.error);
+  if (voted.decision === "accepted") await ensureTurns(getDb(), house.id, now);
+  back(
+    "/house",
+    "notice",
+    voted.decision === "accepted"
+      ? "Agreed by the house."
+      : voted.decision === "rejected"
+        ? "Most of the house said no, so it does not go ahead."
+        : "Vote counted.",
+  );
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────────

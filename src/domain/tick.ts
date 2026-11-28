@@ -13,6 +13,7 @@ import { applyPaymentEvent } from "./payments";
 import { settleHouse } from "./settlement";
 import { FIRST_REMINDER_MS, howToPay } from "./settleup";
 import { missTurn } from "./turns";
+import { closeOldProposals } from "./worth";
 
 const TICK_LOCK_KEY = 4827002;
 const FINAL_REMINDER_MS = 2 * 60 * 60_000;
@@ -263,6 +264,7 @@ async function tickEtransferHouse(ctx: Ctx, house: House): Promise<void> {
   // start only produces overdue debts. Payments someone has asked for are still chased below.
   await remindDebts(ctx, house);
   if (house.paused) return;
+  await closeOldProposals(ctx.db, house.id, ctx.now);
   ctx.summary.approvalsClosed += await closeTimedOutSubmissions(ctx.db, house.id, ctx.now);
   await chargeMisses(ctx, house, await activeMembers(ctx.db, house.id));
   ctx.summary.turnsCreated += await ensureTurns(ctx.db, house.id, ctx.now);
@@ -278,6 +280,7 @@ async function tickHouse(ctx: Ctx, house: House): Promise<void> {
   }
   if (house.paused) return;
 
+  await closeOldProposals(ctx.db, house.id, ctx.now);
   ctx.summary.approvalsClosed += await closeTimedOutSubmissions(ctx.db, house.id, ctx.now);
   await chargeMisses(ctx, house, await activeMembers(ctx.db, house.id));
   ctx.summary.turnsCreated += await ensureTurns(ctx.db, house.id, ctx.now);

@@ -9,7 +9,7 @@ import {
   submitDone,
   voteOnSubmission,
 } from "@/domain/approvals";
-import { createChore, ensureTurns } from "@/domain/chores";
+import { ensureTurns } from "@/domain/chores";
 import { choreBounty, memberBalance } from "@/domain/ledger";
 import { savePhoto } from "@/domain/photos";
 import { settleUpHouse } from "@/domain/settleup";
@@ -19,7 +19,7 @@ import { missTurn } from "@/domain/turns";
 import { fakePayments } from "@/providers/payments";
 import { fakeSms } from "@/providers/sms";
 import { diskStorage } from "@/providers/storage";
-import { db, makeHouse, resetDb, type TestHouse } from "./helpers";
+import { addChore, db, makeHouse, resetDb, type TestHouse } from "./helpers";
 
 const NOW = new Date("2026-11-11T17:00:00Z"); // Wed noon Toronto; garbage is due Thu 21:00
 const LATE = new Date("2026-11-13T02:00:01Z"); // one second past the deadline
@@ -34,7 +34,7 @@ let choreId: string;
 async function setUp(count: number, opts: { moneyMode?: "card" | "etransfer" } = {}) {
   house = await makeHouse(count, opts);
   ids = house.members.map((m) => m.memberId);
-  const chore = await createChore(db, {
+  const chore = await addChore(db, {
     houseId: house.houseId,
     memberId: ids[0],
     name: "Garbage",

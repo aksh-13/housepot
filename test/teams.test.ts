@@ -2,7 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, test } from "vitest";
-import { createChore, ensureTurns } from "@/domain/chores";
+import { ensureTurns } from "@/domain/chores";
 import { choreBounty, memberBalance } from "@/domain/ledger";
 import { savePhoto } from "@/domain/photos";
 import {
@@ -22,7 +22,7 @@ import { houseTurns } from "@/domain/views";
 import { fakePayments } from "@/providers/payments";
 import { fakeSms } from "@/providers/sms";
 import { diskStorage } from "@/providers/storage";
-import { claimBounty, db, makeHouse, markDone, resetDb, type TestHouse } from "./helpers";
+import { addChore, claimBounty, db, makeHouse, markDone, resetDb, type TestHouse } from "./helpers";
 
 const NOW = new Date("2026-11-11T17:00:00Z"); // Wed noon Toronto, inside Team A's first two weeks
 const LATE = new Date("2026-11-13T02:00:01Z"); // just past Thursday's 9pm deadline
@@ -75,7 +75,7 @@ async function photo(memberId: string): Promise<string> {
   return r.photoId;
 }
 async function garbage(teamDuty = true): Promise<string> {
-  const r = await createChore(db, {
+  const r = await addChore(db, {
     houseId: house.houseId,
     memberId: cy,
     name: "Garbage",
@@ -365,7 +365,7 @@ describe("who on the team has which chore", () => {
   let added = 0;
   async function chore(name: string): Promise<void> {
     added += 1;
-    const r = await createChore(db, {
+    const r = await addChore(db, {
       houseId: house.houseId,
       memberId: cy,
       name,

@@ -165,6 +165,7 @@ export default async function ChoresPage({ searchParams }: Props) {
                 <span className="small muted">
                   {scheduleLabel(chore.schedule)}, {timeLabel(chore.deadlineTime)} · worth{" "}
                   {formatCents(chore.skipPriceCents)}
+                  {!chore.agreed && " · waiting for the house to agree"}
                   {waiting.has(chore.id) && (
                     <>
                       <br />

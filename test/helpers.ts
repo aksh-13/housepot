@@ -149,3 +149,31 @@ export async function claimBounty(_db: Db, a: ProofArgs) {
   const sent = await submitClaim(db, { ...a, photoIds: [a.photoId] });
   return approvedByHouse(sent, a.memberId, a.now);
 }
+
+/**
+ * Adds a chore the way most tests want it: in use straight away. Once a house has more than one
+ * person, a new chore is a proposal, so the rest of the house agrees to it here.
+ */
+export async function addChore(_db: Db, a: Parameters<typeof import("@/domain/chores").createChore>[1]) {
+  const { createChore } = await import("@/domain/chores");
+  const { voteOnProposal } = await import("@/domain/worth");
+  const { activeMembers } = await import("@/domain/houses");
+  const created = await createChore(db, a);
+  if (!created.ok || !created.proposed) return created;
+  const proposal = await db.query<{ id: string }>(
+    "select id from chore_proposals where chore_id = $1 and status = 'open'",
+    [created.choreId],
+  );
+  for (const m of await activeMembers(db, a.houseId)) {
+    if (m.id === a.memberId) continue;
+    const voted = await voteOnProposal(db, {
+      proposalId: proposal.rows[0].id,
+      memberId: m.id,
+      agree: true,
+      now: a.now,
+    });
+    if (!voted.ok) throw new Error(voted.error);
+    if (voted.decision !== "open") break;
+  }
+  return created;
+}

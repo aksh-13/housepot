@@ -1,5 +1,5 @@
 import { beforeEach, expect, test } from "vitest";
-import { createChore, ensureTurns } from "@/domain/chores";
+import { ensureTurns } from "@/domain/chores";
 import { activeMembers, getHouse, joinHouse, memberForUser } from "@/domain/houses";
 import { choreBounty, memberBalance, transfer } from "@/domain/ledger";
 import { applyPaymentEvent } from "@/domain/payments";
@@ -13,7 +13,7 @@ import {
 } from "@/domain/settlement";
 import { missTurn } from "@/domain/turns";
 import { type FakePayments, fakePayments } from "@/providers/payments";
-import { db, makeHouse, makeUser, resetDb, type TestHouse } from "./helpers";
+import { addChore, db, makeHouse, makeUser, resetDb, type TestHouse } from "./helpers";
 
 const NOW = new Date("2026-11-11T17:00:00Z");
 const LATE = new Date("2026-11-13T02:00:01Z");
@@ -31,7 +31,7 @@ beforeEach(async () => {
 async function setup(size: number) {
   house = await makeHouse(size);
   ids = house.members.map((m) => m.memberId);
-  const chore = await createChore(db, {
+  const chore = await addChore(db, {
     houseId: house.houseId,
     memberId: ids[0],
     name: "Garbage",

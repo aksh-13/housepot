@@ -1,7 +1,7 @@
 import { beforeEach, expect, test } from "vitest";
-import { createChore, ensureTurns, listChores, updateChore } from "@/domain/chores";
+import { ensureTurns, listChores, updateChore } from "@/domain/chores";
 import { setPaused } from "@/domain/houses";
-import { db, makeHouse, resetDb, type TestHouse } from "./helpers";
+import { addChore, db, makeHouse, resetDb, type TestHouse } from "./helpers";
 
 const NOW = new Date("2026-11-11T17:00:00Z"); // Wed 12:00 Toronto
 const WEEK = 7 * 24 * 3600_000;
@@ -10,7 +10,7 @@ const THURSDAY = { kind: "weekly", weekday: 4 } as const;
 beforeEach(resetDb);
 
 async function garbage(house: TestHouse) {
-  const r = await createChore(db, {
+  const r = await addChore(db, {
     houseId: house.houseId,
     memberId: house.members[0].memberId,
     name: "Garbage",
@@ -28,7 +28,7 @@ const turns = async () =>
 /** Stands in for the turn being finished, so the next one can be created. */
 const finishAssigned = () => db.query("update turns set status = 'done' where status = 'assigned'");
 
-test("a chore defaults to a $5 skip price and appears in the list", async () => {
+test("a chore defaults to being worth $5 and appears in the list", async () => {
   const house = await makeHouse(2);
   const choreId = await garbage(house);
   expect(await listChores(db, house.houseId)).toEqual([
@@ -38,6 +38,7 @@ test("a chore defaults to a $5 skip price and appears in the list", async () => 
       schedule: { kind: "weekly", weekday: 4 },
       deadlineTime: "21:00",
       skipPriceCents: 500,
+      agreed: true,
       archived: false,
       teamDuty: false,
     },
@@ -55,7 +56,7 @@ test.each([
   [{ schedule: { kind: "every_n_days", n: 3, anchorDate: "not-a-date" } }, /date/i],
 ])("a chore with %j is refused", async (bad, message) => {
   const house = await makeHouse(1);
-  const r = await createChore(db, {
+  const r = await addChore(db, {
     houseId: house.houseId,
     memberId: house.members[0].memberId,
     name: "Garbage",
@@ -71,7 +72,7 @@ test.each([
 test("someone from another house cannot add a chore here", async () => {
   const house = await makeHouse(1);
   const other = await makeHouse(1);
-  const r = await createChore(db, {
+  const r = await addChore(db, {
     houseId: house.houseId,
     memberId: other.members[0].memberId,
     name: "Garbage",
@@ -205,8 +206,8 @@ test("changing the day cancels the waiting turn and the same person gets the new
   });
 });
 
-test("changing only the price keeps the waiting turn", async () => {
-  const house = await makeHouse(2);
+test("changing only the worth keeps the waiting turn", async () => {
+  const house = await makeHouse(1);
   const choreId = await garbage(house);
   await ensureTurns(db, house.houseId, NOW);
   await updateChore(db, { choreId, memberId: house.members[0].memberId, skipPriceCents: 800, now: NOW });
@@ -227,7 +228,7 @@ const nowAssigned = async () =>
     ?.assignee_member_id;
 
 async function chore(house: TestHouse, by: number, firstMemberId?: string) {
-  return createChore(db, {
+  return addChore(db, {
     houseId: house.houseId,
     memberId: house.members[by].memberId,
     name: "Dishes",

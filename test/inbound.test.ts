@@ -6,14 +6,14 @@ import { beforeEach, describe, expect, test } from "vitest";
 process.env.INBOUND_EMAIL_SECRET = "test-inbound-secret";
 
 import { POST as emailWebhook } from "@/app/api/webhooks/email/route";
-import { createChore, ensureTurns } from "@/domain/chores";
+import { ensureTurns } from "@/domain/chores";
 import { fakeReceivedEmail, fakeRequestEmail } from "@/domain/fakeInterac";
 import { forwardingAddress, handleInboundEmail, type InboundEmail } from "@/domain/inbound";
 import { allowedRequestUrl, isFromInterac, parseInteracEmail } from "@/domain/interac";
 import { savePhoto } from "@/domain/photos";
 import { type CreatedDebt, settleUpHouse } from "@/domain/settleup";
 import { diskStorage } from "@/providers/storage";
-import { claimBounty, db, expireTurn, makeHouse, resetDb, type TestHouse } from "./helpers";
+import { addChore, claimBounty, db, expireTurn, makeHouse, resetDb, type TestHouse } from "./helpers";
 
 const NOW = new Date("2026-11-11T17:00:00Z");
 const DEC_1 = new Date("2026-12-01T14:00:00Z");
@@ -31,7 +31,7 @@ beforeEach(async () => {
   await resetDb();
   house = await makeHouse(3, { moneyMode: "etransfer" });
   const [a, b] = house.members.map((m) => m.memberId);
-  const chore = await createChore(db, {
+  const chore = await addChore(db, {
     houseId: house.houseId,
     memberId: a,
     name: "Garbage",

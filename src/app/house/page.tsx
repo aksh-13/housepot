@@ -7,6 +7,7 @@ import {
   nudgeAction,
   payAction,
   settleNowAction,
+  worthVoteAction,
 } from "@/app/actions";
 import { PhotoSubmit, ShareLink, SubmitButton } from "@/components/buttons";
 import { Flash, Masthead } from "@/components/frame";
@@ -22,6 +23,7 @@ import { debtsForUser, houseSquareUp } from "@/domain/settleup";
 import { listNudges, teamOnDuty } from "@/domain/teams";
 import { DONE_OPENS_MS } from "@/domain/turns";
 import { houseTurns, type TurnView } from "@/domain/views";
+import { openProposals } from "@/domain/worth";
 import { baseUrl, requireMember } from "@/lib/current";
 import { ago, dateLabel, dueLabel, signedCents } from "@/lib/format";
 import { feeCents, formatCents } from "@/money";
@@ -81,6 +83,21 @@ function describe(item: ActivityItem, meId: string): { text: string; cents?: num
       return { text: `${who} gave ${chore} to ${item.data.toName}` };
     case "dispute_raised":
       return { text: `${who} disputed ${chore}` };
+    case "worth_proposed":
+      return {
+        text:
+          item.data.proposal === "new"
+            ? `${who} proposed ${item.data.name}, worth ${formatCents(Number(item.data.worthCents))}`
+            : `${who} proposed ${item.data.name} be worth ${formatCents(Number(item.data.worthCents))}`,
+      };
+    case "worth_agreed":
+      return {
+        text: `The house agreed: ${item.data.name} is worth ${formatCents(Number(item.data.worthCents))}`,
+      };
+    case "worth_not_agreed":
+      return {
+        text: `${item.data.name} at ${formatCents(Number(item.data.worthCents))} ${item.data.outcome === "lapsed" ? "lapsed without enough votes" : "was turned down"}`,
+      };
     case "proof_sent":
       return { text: `${who} sent photos for ${chore}` };
     case "proof_rejected":
@@ -209,7 +226,11 @@ export default async function HousePage({ searchParams }: Props) {
     etransfer ? debtsForUser(db, user.id) : Promise.resolve([]),
     etransfer ? houseSquareUp(db, house.id) : Promise.resolve({ lines: [], unclaimedCents: 0 }),
   ]);
-  const [duty, nudges] = await Promise.all([teamOnDuty(db, house.id, now), listNudges(db, house.id)]);
+  const [duty, nudges, proposals] = await Promise.all([
+    teamOnDuty(db, house.id, now),
+    listNudges(db, house.id),
+    openProposals(db, house.id),
+  ]);
   // The viewer's own payments first: what they pay, what they get, then everyone else's.
   const involvesMe = (l: { fromMemberId: string; toMemberId: string }) =>
     l.fromMemberId === member.id || l.toMemberId === member.id;
@@ -481,6 +502,48 @@ export default async function HousePage({ searchParams }: Props) {
               )}
             </article>
           ))}
+        </section>
+      )}
+
+      {proposals.length > 0 && (
+        <section className="section">
+          <h2 className="label">What chores are worth</h2>
+          {proposals.map((p) => {
+            const myVote = p.votes[member.id];
+            const mineToAsk = p.proposedById === member.id;
+            return (
+              <article key={p.id} className="turn">
+                <div className="turn-head">
+                  <h3>{p.choreName}</h3>
+                  <span className="bounty">{formatCents(p.worthCents)}</span>
+                </div>
+                <p className="meta">
+                  {mineToAsk ? "You" : p.proposedByName}{" "}
+                  {p.kind === "new"
+                    ? `${mineToAsk ? "want" : "wants"} to add this chore, worth ${formatCents(p.worthCents)}.`
+                    : `${mineToAsk ? "want" : "wants"} it to be worth ${formatCents(p.worthCents)} instead of ${formatCents(p.currentCents)}.`}{" "}
+                  That is what it costs if it expires, and what whoever does it instead takes. {p.yes} of{" "}
+                  {p.needed} agree so far; it lapses {midSentence(dueLabel(p.closesAt, now, house.tz))}.
+                </p>
+                {isActive && !mineToAsk && (
+                  <div className="actions">
+                    <form action={worthVoteAction}>
+                      <input type="hidden" name="proposalId" value={p.id} />
+                      <input type="hidden" name="agree" value="yes" />
+                      <SubmitButton className={myVote === true ? "btn btn-primary" : "btn"}>
+                        Agree
+                      </SubmitButton>
+                    </form>
+                    <form action={worthVoteAction}>
+                      <input type="hidden" name="proposalId" value={p.id} />
+                      <input type="hidden" name="agree" value="no" />
+                      <SubmitButton className={myVote === false ? "btn btn-primary" : "btn"}>No</SubmitButton>
+                    </form>
+                  </div>
+                )}
+              </article>
+            );
+          })}
         </section>
       )}
 
