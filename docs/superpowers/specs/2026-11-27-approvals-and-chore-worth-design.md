@@ -1,6 +1,6 @@
 # Housepot: no skipping, agreed chore worth, approval votes and a first-run walkthrough
 
-Status: plan, waiting on the owner's go-ahead. Nothing here is built yet.
+Status: built on `feat/approvals-and-chore-worth`, with the calls below as defaults.
 
 ## Intent and why
 

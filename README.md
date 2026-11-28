@@ -1,22 +1,24 @@
 # Housepot
 
-Chores with money on the line. Everyone in a house pays a deposit into a pot. Skip or miss your chore and part of your balance goes to whoever does it.
+Chores with money on the line. Let your chore expire and what it is worth comes off your balance and goes to whoever does it instead.
 
 Built for student houses, where everyone knows whose turn it is and nobody does it.
 
 ## The rules
 
-1. Each housemate pays a deposit (default $20) by card. That is their balance.
-2. Chores rotate through the housemates. Whoever adds a chore picks who takes the first turn (anyone in the house); after that it goes round in order.
-3. On your turn you either do it and send a photo, or pay the skip price (default $5) before the deadline.
-4. Miss the deadline and the skip price is taken from your balance anyway. A balance can go below zero.
-5. A skipped or missed chore is open to the whole house. The first person to do it, with a photo, takes the money. That includes the person who missed it.
-6. If nobody claims it, the money rolls over to the next person who does that chore on time.
-7. Any housemate can dispute a "done" within 24 hours. If more than half of the others agree, it counts as a miss.
-8. At the end of term everyone is cashed out and the pot restarts. Money goes back to the card that paid it; winnings on top are sent by e-Transfer.
-   Leaving early cashes you out the same way, but it is not a way out of a charge: a turn waiting on you counts as skipped, you cannot leave within 24 hours of finishing a chore (it can still be disputed), and a debt written off when you leave comes back if you rejoin.
-9. Optional auto-reload: save your card and it tops you back up when you hit $0.
+1. Chores rotate through the housemates. Whoever adds a chore picks who takes the first turn (anyone in the house); after that it goes round in order. A bigger house can split into teams that take turns being on duty (see Teams).
+2. Every chore has a **worth**, agreed by the house. While the house has only the person setting it up, they decide. After that, a new chore, or a new worth for an existing one, needs more than half of the other housemates to agree within three days. A new chore gets no turns until then; an existing one keeps its old worth.
+3. There is no paying to skip. On your turn you do it and send one to four photos before the deadline.
+4. The house approves it: more than half of the other housemates saying "Looks done" makes it count, and more than half saying "Not done" rejects it. If neither happens within 48 hours, it counts. Proof sent before the deadline is on time, however long the vote takes. Nothing is paid until it counts.
+5. Let the deadline pass with nothing sent (or with proof the house rejects) and the chore **expires**: its worth comes off your balance, which can go below zero.
+6. An expired chore is open to the rest of the house. The first person to do it and send photos takes its worth, once the house approves. The person it expired on cannot claim it back, or being late would cost nothing.
+7. If nobody claims it, the money rolls over to the next person who does that chore on time.
+8. Can't make your turn? Ask a housemate to take it, optionally doing one of theirs in exchange. It moves only if they accept, stays yours until then, and lapses at the deadline. A swap does not reshuffle the rotation.
+9. In a card house, at the end of term everyone is cashed out and the pot restarts: money goes back to the card that paid it, and winnings on top are sent by e-Transfer. In an e-Transfer house (the default), nobody pays in and housemates square up with each other whenever they choose.
+   Leaving is not a way out of a charge: a turn waiting on you counts as expired, you cannot leave while the house is still voting on proof you sent, and a debt written off when you leave comes back if you rejoin.
 10. Anyone can pause the house for a break. Nothing is assigned or charged while paused.
+
+Someone new is walked through it the first time they open the app: the rules, then (starting a house) the chores and their worth, where to get paid and the invite link, or (joining) the house's chores and their worth, where to get paid and which team they are on. It can be reopened from Settings.
 
 The full design, with the reasons behind each rule, is in [`docs/superpowers/specs/2026-11-14-housepot-design.md`](docs/superpowers/specs/2026-11-14-housepot-design.md).
 
@@ -37,7 +39,8 @@ A bigger house can split into cleaning teams that take turns being on duty: one 
 - **Team chores.** Each chore is either for "the team on duty" or for "one person at a time". A team chore's turn belongs to whichever team is on duty when it is due.
 - **Who has it.** Team chores are spread across the team so everyone gets one before anyone gets two, and the same chore moves round the team week to week. Anyone in the house can change who has one, on the Teams tab or with "I'll take it".
 - **Doing it.** Whoever has it is named and reminded, but anyone on the team can do it, with a photo.
-- **Missing it.** A team chore cannot be skipped for a price. If nobody on the team does it by the deadline, the price is split equally between everyone on the team, and the chore is open to the whole house as usual.
+- **Missing it.** If nobody on the team does it by the deadline, its worth is split equally between everyone on the team, and the chore is open to the rest of the house as usual. Nobody on that team can claim it back.
+- **Setting it up.** Starting a house asks "How does your house share chores?": everyone takes turns, or teams take turns on duty (how many teams, and how many weeks each). Everyone who joins picks their team, and the House page asks to place anyone who is on no team.
 - **Nudges.** One-tap messages to the team on duty from the House page, like "Garbage is full". A house can add its own. Each goes out at most once an hour.
 
 ## On a phone
@@ -51,7 +54,7 @@ Each house picks one when it is created. The chore rules above are the same in b
 |           | **e-Transfer** (the default)                                                             | **Card deposits** (the original design)                                        |
 | --------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
 | Paying in | Nobody pays in. Everyone starts at $0.                                                   | A deposit by card, held by the app.                                            |
-| Skipping  | Always allowed; your score can go below zero.                                            | Only with enough balance.                                                      |
+| Expiring  | Its worth comes off your score, which can go below zero.                                 | Its worth comes off your balance, which can go below zero.                     |
 | Settling  | Whenever housemates choose: the scores become a few "A pays B" e-Transfers between them. | Cash-out at the end of term: card refunds, plus e-Transfers from the operator. |
 | Cost      | Free. No money touches the app.                                                          | Card fees on every deposit.                                                    |
 | Bills     | Yes.                                                                                     | No.                                                                            |
@@ -118,7 +121,7 @@ curl -X POST -H "Authorization: Bearer dev-tick-secret" http://localhost:3000/ap
 ### Tests and checks
 
 ```sh
-pnpm test        # 331 tests against a real Postgres (pnpm db:up starts it)
+pnpm test        # 418 tests against a real Postgres (pnpm db:up starts it)
 pnpm lint        # Biome: lint and formatting
 pnpm typecheck
 pnpm build
@@ -169,8 +172,10 @@ k delete pod -l app.kubernetes.io/component=web   # kill the pods and watch them
 ```
 src/domain/      the rules, as plain functions that take a database and a time
   ledger.ts      every money movement, double entry; balances are always derived
-  turns.ts       done, skip, miss, claim
-  disputes.ts    raising and voting
+  turns.ts       handing out turns, expiring them, team reassignment
+  approvals.ts   proof photos and the house's vote on every finished chore
+  worth.ts       agreeing on what each chore is worth
+  swaps.ts       asking a housemate to take a turn
   tick.ts        the scheduler's heartbeat
   settlement.ts  cash-out, leaving, end of term
   settleup.ts    e-Transfer houses: settling up (one person or the whole house), debts, reminders, the live "to square up" list
@@ -260,7 +265,8 @@ The app never holds money in this setup, so it needs no payment account. It has 
 - Negative balances mean the pot can owe more than it holds until the person in debt pays. Whoever runs the app covers the gap at cash-out.
 - In an e-Transfer house nothing forces anyone to pay. An overdue debt blocks claiming bounties and everyone can see it, and that is all.
 - Settling up closes any chore that is up for grabs and shares its money out, like the end of term in a card house.
-- "Done" needs a photo, but nobody checks the photo unless a housemate disputes it.
+- A finished chore counts after 48 hours unless most of the house says it was not done, so a house that never votes approves everything.
+- Item-by-item receipts and reading a receipt from a photo are planned next (see `docs/superpowers/specs/2026-11-27-approvals-and-chore-worth-design.md`).
 - One house per person.
 - Bills are split equally or by per-person receipt amounts. Item-by-item receipts, percentages, repeating bills and reading a receipt from a photo are not built.
 - Bills are for e-Transfer houses only.
